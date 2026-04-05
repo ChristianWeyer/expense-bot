@@ -1,0 +1,19 @@
+# Secrets & Runtime State
+.env
+.token_cache.json
+.download_history.json
+
+# Browser & Python
+.browser-data/
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded invoices & personal PDFs
+rechnungen/
+beispiel-pdfs/
+*.PDF
+
+# macOS
+.DS_Store
+Fix all
