@@ -30,14 +30,13 @@ def live(request):
 
 class TestLiveAmazon:
     def test_amazon_login_and_orders(self, live, tmp_path):
-        from dotenv import load_dotenv
-        load_dotenv(Path(__file__).parent.parent / ".env")
         from src.config import AMAZON_EMAIL, AMAZON_PASSWORD
         from src.amazon import download_amazon_invoices
         from playwright.sync_api import sync_playwright
 
         if not AMAZON_EMAIL or not AMAZON_PASSWORD:
             pytest.skip("AMAZON_EMAIL/AMAZON_PASSWORD nicht konfiguriert")
+        print(f"\n  Amazon creds: {AMAZON_EMAIL[:5]}*** / {'set' if AMAZON_PASSWORD else 'NONE'}")
 
         test_entries = [
             {"vendor": "AMZN Mktp DE", "amount": 126.03, "date": "12.03.26", "is_credit": False},

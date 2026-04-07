@@ -44,7 +44,8 @@ OP_AMAZON = os.environ.get("OP_AMAZON_PASSWORD", "").strip() or None
 
 BAHN_EMAIL = _get_secret("BAHN_EMAIL",
     os.environ.get("OP_BAHN_EMAIL", "").strip() or "op://Private/Bahn/username")
-BAHN_PASSWORD = _get_secret("BAHN_PASSWORD", OP_BAHN)
+BAHN_PASSWORD = _get_secret("BAHN_PASSWORD",
+    OP_BAHN or "op://Private/Bahn/password")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
 
 AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID")
@@ -55,7 +56,8 @@ MC_PDF = os.environ.get("MC_PDF", "").strip() or None
 
 AMAZON_EMAIL = _get_secret("AMAZON_EMAIL",
     os.environ.get("OP_AMAZON_EMAIL", "").strip() or "op://Private/Amazon - Thinktecture/email")
-AMAZON_PASSWORD = _get_secret("AMAZON_PASSWORD", OP_AMAZON)
+AMAZON_PASSWORD = _get_secret("AMAZON_PASSWORD",
+    OP_AMAZON or "op://Private/Amazon - Thinktecture/password")
 
 try:
     KEEP_DAYS = int(os.environ.get("KEEP_DAYS", "30"))
