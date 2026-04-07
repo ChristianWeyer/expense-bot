@@ -5,6 +5,7 @@
 
 # Browser & Python
 .browser-data/
+.browser-data-amazon/
 .venv/
 __pycache__/
 *.pyc
