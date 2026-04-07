@@ -1,5 +1,6 @@
 playwright>=1.40
 python-dotenv>=1.0
-pdfplumber>=0.10
+pymupdf>=1.24
+openai>=1.30
 msal>=1.24
 requests>=2.31

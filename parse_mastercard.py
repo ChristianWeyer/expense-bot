@@ -2,13 +2,7 @@
 Mastercard-PDF Parser
 =====================
 Extrahiert DB-Buchungsnummern aus Mastercard/BusinessCard-Abrechnungs-PDFs
-(qards/Sparkasse Format).
-
-Die DB-Einträge haben das Format:
-    DD.MM.YY DD.MM.YY DB Vertrieb GmbH, 123456789012  260,10-
-
-Die 12-stellige Nummer nach "DB Vertrieb GmbH, " ist die Auftragsnummer.
-Einträge mit "+" am Ende sind Gutschriften/Stornos.
+(qards/Sparkasse Format) mittels GPT Vision API.
 
 Nutzung:
     from parse_mastercard import extract_db_bookings
@@ -18,65 +12,54 @@ Nutzung:
     python parse_mastercard.py mastercard.pdf
 """
 
-import re
+import base64
+import json
+import os
 import sys
 from pathlib import Path
 
 
-def extract_text_from_pdf(pdf_path: str | Path) -> str:
-    """Extrahiert Text aus einem PDF."""
-    pdf_path = Path(pdf_path)
+# LLM-Konfiguration
+LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-5.4")
 
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF nicht gefunden: {pdf_path}")
+EXTRACTION_PROMPT = """Extract ALL Deutsche Bahn (DB Vertrieb GmbH) entries from this Mastercard/BusinessCard statement. Check ALL pages carefully.
 
-    # Versuch 1: pdfplumber (bestes Layout-Ergebnis für dieses Format)
-    try:
-        import pdfplumber
+For each entry return a JSON object with:
+- booking_ref: the booking reference number (10-14 digits after "DB Vertrieb GmbH,")
+- amount: the EUR amount (as number, from the "Betrag in EUR" column)
+- date: the Belegdatum (DD.MM.YY)
+- booking_date: the Buchungsdatum (DD.MM.YY)
+- is_credit: true if the amount has a + sign (Gutschrift/Storno), false if - sign (Belastung)
 
-        text = ""
-        with pdfplumber.open(str(pdf_path)) as pdf:
-            for page in pdf.pages:
-                text += (page.extract_text() or "") + "\n"
-        return text
-    except ImportError:
-        pass
+Return ONLY a JSON array, no other text."""
 
-    # Versuch 2: PyMuPDF
+
+def _pdf_to_images(pdf_path: Path) -> list[dict]:
+    """Konvertiert PDF-Seiten in Base64-kodierte PNG-Bilder für die Vision API."""
     try:
         import fitz
-
-        doc = fitz.open(str(pdf_path))
-        text = ""
-        for page in doc:
-            text += page.get_text() + "\n"
-        doc.close()
-        return text
     except ImportError:
-        pass
+        print("PyMuPDF nicht installiert. Bitte installiere:")
+        print("    pip install pymupdf")
+        sys.exit(1)
 
-    # Versuch 3: pdftotext (poppler)
-    try:
-        import subprocess
-
-        result = subprocess.run(
-            ["pdftotext", "-layout", str(pdf_path), "-"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return result.stdout
-    except FileNotFoundError:
-        pass
-
-    print("Kein PDF-Reader verfügbar. Bitte installiere:")
-    print("    pip install pdfplumber")
-    sys.exit(1)
+    doc = fitz.open(str(pdf_path))
+    images = []
+    for page in doc:
+        pix = page.get_pixmap(dpi=200)
+        b64 = base64.b64encode(pix.tobytes("png")).decode()
+        images.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"},
+        })
+    doc.close()
+    return images
 
 
 def extract_db_bookings(pdf_path: str | Path) -> list[dict]:
     """
-    Extrahiert Deutsche Bahn Buchungen aus dem Mastercard/BusinessCard-PDF.
+    Extrahiert Deutsche Bahn Buchungen aus dem Mastercard/BusinessCard-PDF
+    mittels GPT Vision API.
 
     Returns:
         Liste von Dicts mit:
@@ -85,47 +68,55 @@ def extract_db_bookings(pdf_path: str | Path) -> list[dict]:
           - date: Belegdatum (DD.MM.YY)
           - booking_date: Buchungsdatum (DD.MM.YY)
           - is_credit: True wenn Gutschrift/Storno (+)
-          - raw_line: Original-Zeile
     """
-    text = extract_text_from_pdf(pdf_path)
-    lines = text.split("\n")
-    results = []
+    pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF nicht gefunden: {pdf_path}")
 
-    # Pattern für DB-Einträge:
-    # DD.MM.YY DD.MM.YY DB Vertrieb GmbH, XXXXXXXXXXXX  Betrag[+-]
-    db_pattern = re.compile(
-        r"(\d{2}\.\d{2}\.\d{2})\s+"       # Belegdatum
-        r"(\d{2}\.\d{2}\.\d{2})\s+"       # Buchungsdatum
-        r"DB\s+Vertrieb\s+GmbH,\s*"       # Unternehmen
-        r"(\d{10,14})\s+"                  # Auftragsnummer (10-14 stellig)
-        r"([\d.,]+)"                       # Betrag
-        r"([+-])"                          # Vorzeichen (- = Belastung, + = Gutschrift)
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("❌ OPENAI_API_KEY nicht gesetzt in .env")
+        sys.exit(1)
+
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key)
+
+    images = _pdf_to_images(pdf_path)
+    print(f"  🤖 Sende {len(images)} Seiten an {LLM_MODEL} ...")
+
+    response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": EXTRACTION_PROMPT},
+                *images,
+            ],
+        }],
+        max_completion_tokens=4000,
     )
 
-    for line in lines:
-        match = db_pattern.search(line)
-        if match:
-            date_str = match.group(1)
-            booking_date = match.group(2)
-            booking_ref = match.group(3)
-            amount_str = match.group(4).replace(".", "").replace(",", ".")
-            is_credit = match.group(5) == "+"
+    result = response.choices[0].message.content
+    tokens = response.usage.total_tokens if response.usage else 0
+    print(f"  ✅ Antwort erhalten ({tokens} Tokens)")
 
-            try:
-                amount = float(amount_str)
-            except ValueError:
-                amount = 0.0
+    # JSON parsen (ggf. Markdown-Code-Block entfernen)
+    clean = result.strip()
+    if clean.startswith("```"):
+        clean = clean.split("\n", 1)[1].rsplit("```", 1)[0]
 
-            results.append({
-                "booking_ref": booking_ref,
-                "amount": amount,
-                "date": date_str,
-                "booking_date": booking_date,
-                "is_credit": is_credit,
-                "raw_line": line.strip(),
-            })
+    try:
+        entries = json.loads(clean)
+    except json.JSONDecodeError as e:
+        print(f"  ❌ JSON-Parse-Fehler: {e}")
+        print(f"     Antwort: {result[:200]}")
+        return []
 
-    return results
+    # Beträge normalisieren (manche Modelle liefern negative Zahlen statt is_credit)
+    for entry in entries:
+        entry["amount"] = abs(entry.get("amount", 0))
+
+    return entries
 
 
 def get_net_bookings(bookings: list[dict]) -> list[dict]:
@@ -133,13 +124,13 @@ def get_net_bookings(bookings: list[dict]) -> list[dict]:
     Filtert Gutschriften/Stornos heraus.
     Gibt nur Belastungen (Debits) zurück, die tatsächlich eine Rechnung benötigen.
     """
-    return [b for b in bookings if not b["is_credit"]]
+    return [b for b in bookings if not b.get("is_credit")]
 
 
 def print_summary(bookings: list[dict], show_credits: bool = True):
     """Gibt eine Zusammenfassung der gefundenen DB-Buchungen aus."""
-    debits = [b for b in bookings if not b["is_credit"]]
-    credits = [b for b in bookings if b["is_credit"]]
+    debits = [b for b in bookings if not b.get("is_credit")]
+    credits = [b for b in bookings if b.get("is_credit")]
 
     print(f"\n{'=' * 60}")
     print(f"  DB-Buchungen gefunden: {len(bookings)} gesamt")
@@ -147,10 +138,10 @@ def print_summary(bookings: list[dict], show_credits: bool = True):
     print(f"{'=' * 60}\n")
 
     for b in bookings:
-        sign = "+" if b["is_credit"] else "-"
-        typ = "GUTSCHRIFT" if b["is_credit"] else "BELASTUNG "
+        sign = "+" if b.get("is_credit") else "-"
+        typ = "GUTSCHRIFT" if b.get("is_credit") else "BELASTUNG "
         print(
-            f"  {typ}  {b['date']}  "
+            f"  {typ}  {b.get('date', ''):>8s}  "
             f"Auftrag: {b['booking_ref']}  "
             f"{sign}{b['amount']:>8.2f} EUR"
         )
@@ -169,6 +160,9 @@ def print_summary(bookings: list[dict], show_credits: bool = True):
 
 # ─── Standalone ──────────────────────────────────────────
 if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+
     if len(sys.argv) < 2:
         print("Nutzung: python parse_mastercard.py <pfad-zum-mastercard.pdf>")
         print("         python parse_mastercard.py *.pdf  (mehrere Dateien)")
