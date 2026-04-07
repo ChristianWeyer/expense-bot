@@ -888,14 +888,15 @@ def download_invoices(page, timer: Timer, download_all: bool = False, booking_re
 # ─── Email-Versand über Microsoft Graph ──────────────────────────────
 def send_email(files: list[Path], timer: Timer, dry_run: bool = False, cc_email: str | None = None,
                mc_pdf_name: str | None = None, failed_refs: list[str] | None = None,
-               total_refs: int | None = None):
-    """Versendet die Rechnungen per Microsoft Graph API (OAuth)."""
+               total_refs: int | None = None, unmatched_entries: list[dict] | None = None,
+               link_only_entries: list[dict] | None = None):
+    """Versendet die Rechnungen und Belege per Microsoft Graph API (OAuth)."""
     if not files:
-        print("\n📭 Keine neuen Rechnungen zum Versenden.")
+        print("\n📭 Keine neuen Rechnungen/Belege zum Versenden.")
         return
 
     cc_info = f" (CC: {cc_email})" if cc_email else ""
-    print(f"\n📧 Versende {len(files)} Rechnung(en) an {RECIPIENT_EMAIL}{cc_info} ...")
+    print(f"\n📧 Versende {len(files)} PDF(s) an {RECIPIENT_EMAIL}{cc_info} ...")
 
     if dry_run:
         print("  🏃 Dry-Run: Email wird NICHT gesendet")
@@ -906,34 +907,70 @@ def send_email(files: list[Path], timer: Timer, dry_run: bool = False, cc_email:
     # Access-Token holen
     token = get_graph_token()
 
-    # Email-Body – klar als Bot-generiert erkennbar
+    # Email-Body
     now = datetime.now()
-    file_list = "\n".join(f"  - {f.name}" for f in files)
-    source_line = f"\nQuelle: Mastercard-Abrechnung \"{mc_pdf_name}\"\n" if mc_pdf_name else ""
+    db_files = [f for f in files if "DB_Rechnung" in f.name]
+    receipt_files = [f for f in files if "DB_Rechnung" not in f.name]
 
-    # Status-Zeile: alles OK oder Fehlermeldung?
-    if failed_refs and total_refs:
-        status_line = (
-            f"\n⚠️  ACHTUNG: Nur {len(files)} von {total_refs} Rechnungen konnten heruntergeladen werden!\n\n"
-            f"Fehlgeschlagene Buchungen (bitte manuell prüfen):\n"
-        )
-        for ref in failed_refs:
-            status_line += f"  - Auftrag {ref}: https://www.bahn.de/buchung/reise?auftragsnummer={ref}\n"
-        status_line += "\n"
-    elif total_refs:
-        status_line = f"\nAlle {total_refs} Rechnungen erfolgreich heruntergeladen.\n\n"
-    else:
-        status_line = "\n"
+    source_line = f"Quelle: Mastercard-Abrechnung \"{mc_pdf_name}\"\n\n" if mc_pdf_name else ""
+
+    # DB-Rechnungen Status
+    db_section = ""
+    if db_files:
+        if failed_refs and total_refs:
+            db_section = (
+                f"DB-Rechnungen: {len(db_files)} von {total_refs} heruntergeladen\n"
+                f"⚠️  Fehlgeschlagene Buchungen (bitte manuell prüfen):\n"
+            )
+            for ref in failed_refs:
+                db_section += f"  - Auftrag {ref}: https://www.bahn.de/buchung/reise?auftragsnummer={ref}\n"
+        elif total_refs:
+            db_section = f"DB-Rechnungen: alle {total_refs} erfolgreich heruntergeladen\n"
+        db_section += "".join(f"  - {f.name}\n" for f in db_files)
+        db_section += "\n"
+
+    # Belege Status
+    receipt_section = ""
+    if receipt_files:
+        receipt_section = f"Belege aus Outlook: {len(receipt_files)} PDFs heruntergeladen\n"
+        receipt_section += "".join(f"  - {f.name}\n" for f in receipt_files)
+        receipt_section += "\n"
+
+    # Belege nur als Link (kein PDF-Anhang)
+    link_section = ""
+    if link_only_entries:
+        link_section = f"ℹ️  Belege ohne PDF-Anhang ({len(link_only_entries)}) – bitte manuell herunterladen:\n"
+        for m in link_only_entries:
+            e = m.get("entry", {})
+            vendor = e.get("vendor", "?")
+            amount = e.get("amount", 0)
+            url = m.get("receipt_url", "")
+            link_section += f"  - {vendor}  {amount:.2f} EUR\n"
+            if url:
+                link_section += f"    → {url}\n"
+        link_section += "\n"
+
+    # Fehlende Belege
+    unmatched_section = ""
+    if unmatched_entries:
+        unmatched_section = f"⚠️  Kein Beleg gefunden für {len(unmatched_entries)} Einträge:\n"
+        for e in unmatched_entries:
+            vendor = e.get("vendor", "?")
+            amount = e.get("amount", 0)
+            date = e.get("date", "")
+            unmatched_section += f"  - {date}  {vendor}  {amount:.2f} EUR\n"
+        unmatched_section += "\n"
 
     body_text = (
-        f"--- Automatisch generierte Email (DB-Rechnungs-Bot) ---\n\n"
+        f"--- Automatisch generierte Email (Expense Bot) ---\n\n"
         f"Hallo,\n\n"
-        f"anbei {len(files)} Rechnung(en) der Deutschen Bahn als PDF im Anhang.\n"
+        f"anbei {len(files)} Beleg(e) als PDF im Anhang.\n\n"
         f"{source_line}"
-        f"{status_line}"
-        f"Dateien:\n{file_list}\n\n"
-        f"Diese Email wurde automatisch erstellt und versendet durch\n"
-        f"Christians DB-Rechnungs-Bot am {now.strftime('%d.%m.%Y um %H:%M Uhr')}.\n\n"
+        f"{db_section}"
+        f"{receipt_section}"
+        f"{link_section}"
+        f"{unmatched_section}"
+        f"Diese Email wurde automatisch erstellt am {now.strftime('%d.%m.%Y um %H:%M Uhr')}.\n\n"
         f"Bei Fragen bitte direkt an den Absender wenden.\n"
         f"--- Ende der automatischen Nachricht ---"
     )
@@ -953,18 +990,19 @@ def send_email(files: list[Path], timer: Timer, dry_run: bool = False, cc_email:
     to_recipients = [{"emailAddress": {"address": RECIPIENT_EMAIL}}]
     cc_recipients = [{"emailAddress": {"address": cc_email}}] if cc_email else []
 
+    # Betreff
+    has_issues = bool(failed_refs or unmatched_entries)
+    subject = (
+        f"[Automatisch] Belege ({len(files)} PDFs)"
+        f" – {now.strftime('%d.%m.%Y')}"
+        f"{f' – {mc_pdf_name}' if mc_pdf_name else ''}"
+        f"{' ⚠️ UNVOLLSTÄNDIG' if has_issues else ''}"
+    )
+
     # Graph API Payload
     payload = {
         "message": {
-            "subject": (
-                f"[Automatisch erstellt] DB-Reiserechnungen "
-                f"({len(files)}/{total_refs} PDFs)" if total_refs else
-                f"[Automatisch erstellt] DB-Reiserechnungen ({len(files)} PDFs)"
-            ) + (
-                f" – {now.strftime('%d.%m.%Y')}"
-                f"{f' - Basis: {mc_pdf_name}' if mc_pdf_name else ''}"
-                f"{' ⚠️ UNVOLLSTÄNDIG' if failed_refs else ''}"
-            ),
+            "subject": subject,
             "body": {
                 "contentType": "Text",
                 "content": body_text,
@@ -1084,11 +1122,14 @@ def main():
 
     # ── Belege aus Outlook holen (falls --fetch-receipts) ──
     receipt_files = []
+    unmatched_entries = []
     if args.fetch_receipts and non_db_entries:
         from fetch_receipts import match_and_download_receipts
         token = get_graph_token()
         receipt_results = match_and_download_receipts(token, non_db_entries, BELEGE_DIR)
         receipt_files = receipt_results.get("downloaded_files", [])
+        unmatched_entries = receipt_results.get("unmatched", [])
+        link_only_entries = [m for m in receipt_results.get("matched", []) if m.get("receipt_url") and not m.get("files")]
         timer.lap(f"Belege ({len(receipt_files)} PDFs)")
 
     with sync_playwright() as p:
@@ -1126,7 +1167,8 @@ def main():
                 files, failed = download_invoices(page, timer, download_all=args.all, booking_refs=booking_refs)
                 total = len(booking_refs) if booking_refs else None
                 send_email(files + receipt_files, timer, dry_run=args.dry_run, cc_email=args.cc,
-                           mc_pdf_name=mc_pdf_name, failed_refs=failed, total_refs=total)
+                           mc_pdf_name=mc_pdf_name, failed_refs=failed, total_refs=total,
+                           unmatched_entries=unmatched_entries, link_only_entries=link_only_entries)
             finally:
                 page.close()  # Nur den Tab schließen, nicht Chrome selbst!
                 browser.close()  # CDP-Verbindung trennen (Chrome läuft weiter)
@@ -1159,7 +1201,8 @@ def main():
                 files, failed = download_invoices(page, timer, download_all=args.all, booking_refs=booking_refs)
                 total = len(booking_refs) if booking_refs else None
                 send_email(files + receipt_files, timer, dry_run=args.dry_run, cc_email=args.cc,
-                           mc_pdf_name=mc_pdf_name, failed_refs=failed, total_refs=total)
+                           mc_pdf_name=mc_pdf_name, failed_refs=failed, total_refs=total,
+                           unmatched_entries=unmatched_entries, link_only_entries=link_only_entries)
             finally:
                 context.close()
 

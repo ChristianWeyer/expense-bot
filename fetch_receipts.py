@@ -135,49 +135,132 @@ def _parse_date(date_str: str) -> datetime | None:
 
 # ─── Mail-Suche und Download ────────────────────────────────────────
 
-def search_receipts_for_entry(token: str, folder_id: str, entry: dict) -> list[dict]:
-    """Sucht passende Emails zu einem MC-Eintrag im Belege-Ordner."""
+# Begriffe die auf eine Rechnung/Beleg hindeuten
+RECEIPT_TERMS = ["invoice", "receipt", "rechnung", "beleg", "quittung", "billing", "payment"]
+
+
+def _score_candidate(msg: dict, vendor_keyword: str, amount: float) -> int:
+    """Bewertet wie gut eine Email zu einem MC-Eintrag passt (höher = besser)."""
+    subject = (msg.get("subject") or "").lower()
+    sender = (msg.get("from", {}).get("emailAddress", {}).get("address") or "").lower()
+    score = 0
+
+    # Vendor im Betreff oder Absender?
+    if vendor_keyword.lower() in subject:
+        score += 3
+    if vendor_keyword.lower() in sender:
+        score += 3
+
+    # Rechnungs-/Beleg-Begriffe im Betreff?
+    for term in RECEIPT_TERMS:
+        if term in subject:
+            score += 2
+            break
+
+    # Betrag im Betreff? (z.B. "49,99" oder "49.99")
+    amount_str_comma = f"{amount:.2f}".replace(".", ",")
+    amount_str_dot = f"{amount:.2f}"
+    if amount_str_comma in subject or amount_str_dot in subject:
+        score += 2
+
+    return score
+
+
+def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) -> list[dict]:
+    """Sucht passende Emails zu einem MC-Eintrag in den angegebenen Ordnern."""
     keywords = _get_search_keywords(entry.get("vendor", ""))
     date = _parse_date(entry.get("date", ""))
+    amount = entry.get("amount", 0)
 
     if not date:
         return []
 
-    # Zeitfenster: Belegdatum - 3 Tage bis + DATE_TOLERANCE Tage
-    date_from = (date - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
-    date_to = (date + timedelta(days=DATE_TOLERANCE)).strftime("%Y-%m-%dT23:59:59Z")
+    # Zeitfenster für Post-Filter
+    date_from = date - timedelta(days=3)
+    date_to = date + timedelta(days=DATE_TOLERANCE)
 
     candidates = []
     for keyword in keywords:
-        data = _graph_get(
-            f"{GRAPH_BASE}/me/mailFolders/{folder_id}/messages",
-            token,
-            {
-                "$filter": f"receivedDateTime ge {date_from} and receivedDateTime le {date_to}",
-                "$search": f'"{keyword}"',
-                "$select": "id,subject,receivedDateTime,from,hasAttachments",
-                "$top": "10",
-                "$orderby": "receivedDateTime desc",
-            },
-        )
-        for msg in data.get("value", []):
-            if msg.get("hasAttachments"):
-                candidates.append(msg)
+        for folder_id in folder_ids:
+            data = _graph_get(
+                f"{GRAPH_BASE}/me/mailFolders/{folder_id}/messages",
+                token,
+                {
+                    "$search": f'"{keyword}"',
+                    "$select": "id,subject,receivedDateTime,from,hasAttachments",
+                    "$top": "25",
+                },
+            )
+            for msg in data.get("value", []):
+                # Datum prüfen
+                recv = msg.get("receivedDateTime", "")
+                try:
+                    recv_date = datetime.fromisoformat(recv.replace("Z", "+00:00")).replace(tzinfo=None)
+                    if date_from <= recv_date <= date_to:
+                        msg["_score"] = _score_candidate(msg, keyword, amount)
+                        msg["_has_attachments"] = msg.get("hasAttachments", False)
+                        candidates.append(msg)
+                except (ValueError, TypeError):
+                    pass
+
+            if candidates:
+                break
 
         if candidates:
-            break  # Erster Keyword-Treffer reicht
+            break
 
-        time.sleep(0.3)  # Rate-Limiting
+        time.sleep(0.3)
 
-    return candidates
+    # Nach Score sortieren (beste zuerst), Mindest-Score 2 (muss zumindest Rechnungsbegriff haben)
+    candidates.sort(key=lambda m: m.get("_score", 0), reverse=True)
+    return [c for c in candidates if c.get("_score", 0) >= 2]
+
+
+def _extract_receipt_url(token: str, message_id: str) -> str | None:
+    """Extrahiert einen Receipt/Invoice-Link aus dem Email-Body."""
+    data = _graph_get(
+        f"{GRAPH_BASE}/me/messages/{message_id}",
+        token,
+        {"$select": "body"},
+    )
+    body = (data.get("body", {}).get("content") or "")
+
+    receipt_keywords = ["receipt", "invoice", "billing", "rechnung", "download", "beleg"]
+    skip_keywords = ["unsubscribe", "mailto:", "privacy", "terms", "help", "cancel", "settings"]
+
+    # Suche 1: Links deren URL Receipt/Invoice-Begriffe enthält
+    url_pattern = re.compile(r'href=["\']?(https?://[^"\'>\s]+)', re.IGNORECASE)
+    for match in url_pattern.finditer(body):
+        url = match.group(1)
+        url_lower = url.lower()
+        if any(kw in url_lower for kw in receipt_keywords):
+            if not any(skip in url_lower for skip in skip_keywords):
+                return url
+
+    # Suche 2: Links deren Anchor-Text oder umgebender Text (±100 Zeichen)
+    # Receipt/Invoice-Begriffe enthält.
+    # z.B. "find your receipt <a href="...">here</a>"
+    anchor_pattern = re.compile(r'<a\s[^>]*href=["\']?(https?://[^"\'>\s]+)["\']?[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
+    for match in anchor_pattern.finditer(body):
+        url = match.group(1)
+        anchor_text = re.sub(r'<[^>]+>', '', match.group(2)).lower().strip()
+        # Kontext: 150 Zeichen vor und nach dem Link
+        start = max(0, match.start() - 150)
+        end = min(len(body), match.end() + 150)
+        context = re.sub(r'<[^>]+>', ' ', body[start:end]).lower()
+
+        if any(kw in anchor_text or kw in context for kw in receipt_keywords):
+            if not any(skip in url.lower() for skip in skip_keywords):
+                return url
+
+    return None
 
 
 def download_attachments(token: str, message_id: str, download_dir: Path, prefix: str = "") -> list[Path]:
-    """Lädt PDF-Anhänge einer Email herunter."""
+    """Lädt PDF-Anhänge einer Email herunter (bevorzugt Invoice/Receipt-Dateien)."""
     data = _graph_get(
         f"{GRAPH_BASE}/me/messages/{message_id}/attachments",
         token,
-        {"$select": "id,name,contentType,contentBytes,size"},
     )
 
     downloaded = []
@@ -227,13 +310,20 @@ def match_and_download_receipts(
     """
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Belege-Ordner finden
-    print(f"\n📂 Suche Outlook-Ordner '{BELEGE_FOLDER}' ...")
-    folder_id = find_mail_folder(token, BELEGE_FOLDER)
-    if not folder_id:
-        print(f"  ❌ Ordner '{BELEGE_FOLDER}' nicht gefunden!")
+    # 1. Mail-Ordner finden (Belege + Archive als Fallback)
+    search_folders = []
+    search_folder_names = os.environ.get("BELEGE_SEARCH_FOLDERS", f"{BELEGE_FOLDER},Archiv,Archive")
+    for folder_name in search_folder_names.split(","):
+        print(f"  📂 Suche Outlook-Ordner '{folder_name}' ...")
+        fid = find_mail_folder(token, folder_name)
+        if fid:
+            search_folders.append(fid)
+            print(f"     ✅ gefunden")
+        else:
+            print(f"     ⚠️  nicht gefunden")
+    if not search_folders:
+        print(f"  ❌ Keine durchsuchbaren Ordner gefunden!")
         return {"matched": [], "unmatched": entries, "downloaded_files": []}
-    print(f"  ✅ Ordner gefunden")
 
     matched = []
     unmatched = []
@@ -249,14 +339,15 @@ def match_and_download_receipts(
         date = entry.get("date", "")
         print(f"  [{idx}/{len(debits)}] {vendor:<30s}  {amount:>8.2f} EUR  ({date})")
 
-        candidates = search_receipts_for_entry(token, folder_id, entry)
+        candidates = search_receipts_for_entry(token, search_folders, entry)
         if not candidates:
             print(f"         ⚠️  Kein passender Beleg gefunden")
             unmatched.append(entry)
             continue
 
-        # Besten Kandidaten nehmen (erster Treffer mit Anhang)
-        msg = candidates[0]
+        # Besten Kandidaten nehmen — bevorzuge solche MIT Anhang
+        with_att = [c for c in candidates if c.get("_has_attachments")]
+        msg = with_att[0] if with_att else candidates[0]
         subject = msg.get("subject", "")[:60]
         print(f"         ✅ {subject}")
 
@@ -265,19 +356,33 @@ def match_and_download_receipts(
         vendor_short = re.sub(r"[^\w]", "", vendor)[:20]
         prefix = f"{date_prefix}{vendor_short}_"
 
-        files = download_attachments(token, msg["id"], download_dir, prefix)
-        if files:
-            for f in files:
-                print(f"         📎 {f.name}")
-            all_files.extend(files)
+        if msg.get("_has_attachments"):
+            files = download_attachments(token, msg["id"], download_dir, prefix)
+            if files:
+                for f in files:
+                    print(f"         📎 {f.name}")
+                all_files.extend(files)
+                matched.append({
+                    "entry": entry,
+                    "email_subject": msg.get("subject", ""),
+                    "files": files,
+                })
+            else:
+                print(f"         ⚠️  Email gefunden aber kein PDF-Anhang")
+                unmatched.append(entry)
+        else:
+            # Kein Anhang — versuche Receipt-Link aus dem Email-Body zu extrahieren
+            receipt_url = _extract_receipt_url(token, msg["id"])
+            if receipt_url:
+                print(f"         🔗 {receipt_url}")
+            else:
+                print(f"         ℹ️  Email ohne PDF-Anhang (Beleg vermutlich als Link)")
             matched.append({
                 "entry": entry,
                 "email_subject": msg.get("subject", ""),
-                "files": files,
+                "files": [],
+                "receipt_url": receipt_url,
             })
-        else:
-            print(f"         ⚠️  Email gefunden aber kein PDF-Anhang")
-            unmatched.append(entry)
 
         time.sleep(0.3)  # Rate-Limiting
 

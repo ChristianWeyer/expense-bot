@@ -35,8 +35,11 @@ For each entry return a JSON object with:
 
 Return ONLY a JSON array, no other text."""
 
-ALL_ENTRIES_PROMPT = """Extract ALL entries from this Mastercard/BusinessCard statement. Check ALL pages carefully.
+ALL_ENTRIES_PROMPT = """Extract entries from this Mastercard/BusinessCard statement. Check ALL pages carefully.
 Skip subtotals ("Zwischensumme"), carry-overs ("Übertrag"), and currency conversion fee lines ("2% für Währungsumrechnung").
+
+IMPORTANT: If some entries are highlighted/marked in yellow, extract ONLY those highlighted entries.
+If NO entries are highlighted, extract ALL entries.
 
 For each entry return a JSON object with:
 - vendor: the merchant/company name (e.g. "ANTHROPIC", "Amazon.de", "DB Vertrieb GmbH")
