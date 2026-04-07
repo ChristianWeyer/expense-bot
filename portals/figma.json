@@ -2,9 +2,9 @@
     "id": "figma",
     "name": "Figma",
     "homepage": "https://www.figma.com",
-    "billing_url": "https://www.figma.com/billing/",
-    "auth_check_url": "https://www.figma.com/billing/",
-    "auth_check_selector": "[class*='billing'], [class*='invoice']",
+    "billing_url": "https://www.figma.com/settings",
+    "auth_check_url": "https://www.figma.com/settings",
+    "auth_check_selector": "nav, [class*='settings']",
     "match_keywords": ["FIGMA"],
     "invoices": {
         "selector": "a[href*='stripe.com'], a[href*='invoice'], a:has-text('Receipt'), a:has-text('Invoice')",

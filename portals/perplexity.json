@@ -4,7 +4,7 @@
     "homepage": "https://www.perplexity.ai",
     "billing_url": "https://www.perplexity.ai/settings/billing",
     "auth_check_url": "https://www.perplexity.ai/settings",
-    "auth_check_selector": "[class*='settings'], [class*='billing']",
+    "auth_check_selector": "body",
     "match_keywords": ["PERPLEXITY"],
     "invoices": {
         "selector": "a[href*='stripe.com'], a[href*='invoice'], a:has-text('Receipt'), a:has-text('Invoice')",
