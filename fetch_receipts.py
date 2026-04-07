@@ -136,7 +136,10 @@ def _parse_date(date_str: str) -> datetime | None:
 # ─── Mail-Suche und Download ────────────────────────────────────────
 
 # Begriffe die auf eine Rechnung/Beleg hindeuten
-RECEIPT_TERMS = ["invoice", "receipt", "rechnung", "beleg", "quittung", "billing", "payment"]
+RECEIPT_TERMS = [
+    "invoice", "receipt", "rechnung", "beleg", "quittung", "billing", "payment",
+    "bestellt", "bestellung", "order", "subscription", "abonnement",
+]
 
 
 def _score_candidate(msg: dict, vendor_keyword: str, amount: float) -> int:
@@ -225,7 +228,7 @@ def _extract_receipt_url(token: str, message_id: str) -> str | None:
     )
     body = (data.get("body", {}).get("content") or "")
 
-    receipt_keywords = ["receipt", "invoice", "billing", "rechnung", "download", "beleg"]
+    receipt_keywords = ["receipt", "invoice", "billing", "rechnung", "download", "beleg", "order", "bestellung"]
     skip_keywords = ["unsubscribe", "mailto:", "privacy", "terms", "help", "cancel", "settings"]
 
     # Suche 1: Links deren URL Receipt/Invoice-Begriffe enthält
