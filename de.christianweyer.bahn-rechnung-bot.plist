@@ -15,7 +15,6 @@
         <string>/Users/christianweyer/sources/bahn-rechnung-bot/run.sh</string>
         <string>--mc-pdf</string>
         <string>/Users/christianweyer/Downloads/mc-abrechnungen</string>
-        <string>--fetch-receipts</string>
     </array>
 
     <key>EnvironmentVariables</key>

@@ -1091,10 +1091,6 @@ def main():
                         default=CDP_URL,
                         help="An laufenden Chrome (Canary) anhängen (CDP). "
                              "Standard aus .env: CDP_URL")
-    parser.add_argument("--fetch-receipts", action="store_true",
-                        help="Auch Belege aus Outlook 'Belege'-Ordner suchen und herunterladen")
-    parser.add_argument("--fetch-amazon", action="store_true",
-                        help="Amazon.de Rechnungen per Playwright herunterladen")
     args = parser.parse_args()
 
     timer = Timer()
@@ -1115,8 +1111,13 @@ def main():
     # Mastercard-PDF parsen (falls angegeben)
     booking_refs = None
     mc_pdf_name = None
+    non_db_entries = []
+    receipt_files = []
+    unmatched_entries = []
+    link_only_entries = []
+
     if args.mc_pdf:
-        from parse_mastercard import extract_db_bookings, get_net_bookings, print_summary
+        from parse_mastercard import extract_all_entries, get_db_entries, get_non_db_entries, print_summary
 
         mc_path = Path(args.mc_pdf)
 
@@ -1139,30 +1140,20 @@ def main():
         mc_pdf_name = mc_path.name
         print(f"\n💳 Lese Mastercard-PDF: {mc_path}")
 
-        if args.fetch_receipts:
-            # Alle Einträge extrahieren (DB + sonstige)
-            from parse_mastercard import extract_all_entries, get_db_entries, get_non_db_entries
-            all_entries = extract_all_entries(str(mc_path))
-            db_entries = get_db_entries(all_entries)
-            non_db_entries = get_non_db_entries(all_entries)
-            net = print_summary(db_entries, "DB-Buchungen")
-            booking_refs = [b["booking_ref"] for b in net if b.get("booking_ref")]
-        else:
-            bookings = extract_db_bookings(str(mc_path))
-            non_db_entries = []
-            net = print_summary(bookings)
-            booking_refs = [b["booking_ref"] for b in net if b.get("booking_ref")]
+        # Alle Einträge extrahieren (DB + sonstige)
+        all_entries = extract_all_entries(str(mc_path))
+        db_entries = get_db_entries(all_entries)
+        non_db_entries = get_non_db_entries(all_entries)
+        net = print_summary(db_entries, "DB-Buchungen")
+        booking_refs = [b["booking_ref"] for b in net if b.get("booking_ref")]
 
         timer.lap("PDF-Parsing")
         if not booking_refs:
             print("⚠️  Keine DB-Buchungsnummern im PDF gefunden.")
             print("    Falle zurück auf 'Meine Reisen'-Modus ...")
 
-    # ── Belege aus Outlook holen (falls --fetch-receipts) ──
-    receipt_files = []
-    unmatched_entries = []
-    link_only_entries = []
-    if args.fetch_receipts and non_db_entries:
+    # ── Belege aus Outlook holen ──
+    if non_db_entries:
         from fetch_receipts import match_and_download_receipts
         token = get_graph_token()
         receipt_results = match_and_download_receipts(token, non_db_entries, BELEGE_DIR)
@@ -1207,7 +1198,7 @@ def main():
                 files, failed = download_invoices(page, timer, download_all=args.all, booking_refs=booking_refs)
 
                 # Amazon.de Rechnungen herunterladen
-                if args.fetch_amazon and AMAZON_EMAIL and AMAZON_PASSWORD and unmatched_entries:
+                if AMAZON_EMAIL and AMAZON_PASSWORD and unmatched_entries:
                     from fetch_amazon import download_amazon_invoices
                     amazon_page = context.new_page()
                     amazon_files = download_amazon_invoices(
@@ -1253,7 +1244,7 @@ def main():
                 files, failed = download_invoices(page, timer, download_all=args.all, booking_refs=booking_refs)
 
                 # Amazon.de Rechnungen herunterladen
-                if args.fetch_amazon and AMAZON_EMAIL and AMAZON_PASSWORD and unmatched_entries:
+                if AMAZON_EMAIL and AMAZON_PASSWORD and unmatched_entries:
                     from fetch_amazon import download_amazon_invoices
                     amazon_page = context.new_page()
                     amazon_files = download_amazon_invoices(

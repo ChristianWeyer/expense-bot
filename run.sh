@@ -6,9 +6,8 @@
 #   ./run.sh --dry-run                          # Nur testen, nicht senden
 #
 # Oder mit expliziten Parametern:
-#   ./run.sh --mc-pdf abrechnung.pdf            # Bestimmtes PDF
+#   ./run.sh --mc-pdf abrechnung.pdf            # MC-PDF → DB + Outlook + Amazon
 #   ./run.sh --mc-pdf ~/Downloads/              # Neuestes PDF im Ordner
-#   ./run.sh --fetch-receipts --mc-pdf abr.pdf  # + Belege aus Outlook
 #   ./run.sh --cdp --mc-pdf abrechnung.pdf      # CDP + PDF
 #   ./run.sh --cc chef@firma.de                 # Mit CC
 #   ./run.sh --headed                           # Browser sichtbar (Debugging)
