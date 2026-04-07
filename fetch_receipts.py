@@ -103,9 +103,15 @@ VENDOR_KEYWORDS = {
     "HANDELSBL": ["handelsblatt"],
     "HEISE": ["heise"],
     "ELEVENLABS": ["elevenlabs"],
-    "WINDSURF": ["windsurf"],
+    "WINDSURF": ["windsurf", "exafunction"],
     "PERPLEXITY": ["perplexity"],
     "CLAUDE.AI": ["claude"],
+    "NEW YORK TIMES": ["nytimes"],
+    "WSJ": ["wsj", "wall street journal"],
+    "DJ*WSJ": ["wsj", "wall street journal"],
+    "AUDIBLE": ["audible"],
+    "PAYPAL": ["paypal"],
+    "FRAENK": ["fraenk"],
 }
 
 
@@ -138,7 +144,7 @@ def _parse_date(date_str: str) -> datetime | None:
 # Begriffe die auf eine Rechnung/Beleg hindeuten
 RECEIPT_TERMS = [
     "invoice", "receipt", "rechnung", "beleg", "quittung", "billing", "payment",
-    "bestellt", "bestellung", "order", "subscription", "abonnement",
+    "zahlung", "bestellt", "bestellung", "order", "subscription", "abonnement",
 ]
 
 
