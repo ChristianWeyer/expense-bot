@@ -1123,13 +1123,15 @@ def main():
     # ── Belege aus Outlook holen (falls --fetch-receipts) ──
     receipt_files = []
     unmatched_entries = []
+    link_only_entries = []
     if args.fetch_receipts and non_db_entries:
         from fetch_receipts import match_and_download_receipts
         token = get_graph_token()
         receipt_results = match_and_download_receipts(token, non_db_entries, BELEGE_DIR)
         receipt_files = receipt_results.get("downloaded_files", [])
         unmatched_entries = receipt_results.get("unmatched", [])
-        link_only_entries = [m for m in receipt_results.get("matched", []) if m.get("receipt_url") and not m.get("files")]
+        link_only_entries = [m for m in receipt_results.get("matched", [])
+                            if m.get("receipt_url") and not m.get("files")]
         timer.lap(f"Belege ({len(receipt_files)} PDFs)")
 
     with sync_playwright() as p:

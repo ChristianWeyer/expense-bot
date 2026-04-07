@@ -391,6 +391,7 @@ def match_and_download_receipts(
                 matched.append({
                     "entry": entry,
                     "email_subject": msg.get("subject", ""),
+                    "email_id": msg["id"],
                     "files": files,
                 })
             else:
@@ -406,6 +407,7 @@ def match_and_download_receipts(
             matched.append({
                 "entry": entry,
                 "email_subject": msg.get("subject", ""),
+                "email_id": msg["id"],
                 "files": [],
                 "receipt_url": receipt_url,
             })
