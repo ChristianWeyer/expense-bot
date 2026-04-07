@@ -1,0 +1,18 @@
+{
+    "id": "figma",
+    "name": "Figma",
+    "homepage": "https://www.figma.com",
+    "billing_url": "https://www.figma.com/billing/",
+    "auth_check_url": "https://www.figma.com/billing/",
+    "auth_check_selector": "[class*='billing'], [class*='invoice']",
+    "match_keywords": ["FIGMA"],
+    "invoices": {
+        "selector": "a[href*='stripe.com'], a[href*='invoice'], a:has-text('Receipt'), a:has-text('Invoice')",
+        "fields": {
+            "pdf_url": {"selector": "self", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "stripe_url"
+    }
+}

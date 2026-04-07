@@ -1,0 +1,18 @@
+{
+    "id": "google-payments",
+    "name": "Google Payments",
+    "homepage": "https://pay.google.com",
+    "billing_url": "https://pay.google.com/gp/w/home/activity",
+    "auth_check_url": "https://pay.google.com/gp/w/home/activity",
+    "auth_check_selector": "[data-testid*='activity'], [class*='transaction']",
+    "match_keywords": ["GOOGLE", "YOUTUBE", "WL*GOOGLE"],
+    "invoices": {
+        "selector": "a[href*='receipt'], a[href*='invoice'], a:has-text('Beleg'), a:has-text('Receipt')",
+        "fields": {
+            "pdf_url": {"selector": "self", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "print_page"
+    }
+}

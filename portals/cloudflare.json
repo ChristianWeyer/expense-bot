@@ -1,0 +1,18 @@
+{
+    "id": "cloudflare",
+    "name": "Cloudflare",
+    "homepage": "https://dash.cloudflare.com",
+    "billing_url": "https://dash.cloudflare.com/?to=/:account/billing",
+    "auth_check_url": "https://dash.cloudflare.com",
+    "auth_check_selector": "[class*='dashboard'], nav",
+    "match_keywords": ["CLOUDFLARE"],
+    "invoices": {
+        "selector": "a[href*='invoice'], a[href*='receipt'], tr[class*='invoice']",
+        "fields": {
+            "pdf_url": {"selector": "a[href*='pdf'], a:has-text('Download')", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "direct_link"
+    }
+}

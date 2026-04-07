@@ -1,0 +1,18 @@
+{
+    "id": "paypal",
+    "name": "PayPal",
+    "homepage": "https://www.paypal.com",
+    "billing_url": "https://www.paypal.com/myaccount/transactions/",
+    "auth_check_url": "https://www.paypal.com/myaccount",
+    "auth_check_selector": "[class*='account'], [data-testid*='activity']",
+    "match_keywords": ["PAYPAL", "FRAENK"],
+    "invoices": {
+        "selector": "a[href*='receipt'], a[href*='details']",
+        "fields": {
+            "pdf_url": {"selector": "self", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "print_page"
+    }
+}

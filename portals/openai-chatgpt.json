@@ -1,0 +1,18 @@
+{
+    "id": "openai-chatgpt",
+    "name": "OpenAI ChatGPT",
+    "homepage": "https://chatgpt.com",
+    "billing_url": "https://chatgpt.com/settings",
+    "auth_check_url": "https://chatgpt.com/settings",
+    "auth_check_selector": "nav",
+    "match_keywords": ["CHATGPT"],
+    "invoices": {
+        "selector": "a[href*='stripe.com/invoice'], a[href*='stripe.com/receipt'], a[href*='invoice.stripe.com']",
+        "fields": {
+            "pdf_url": {"selector": "self", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "stripe_url"
+    }
+}

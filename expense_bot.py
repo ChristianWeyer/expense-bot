@@ -145,6 +145,7 @@ def main():
 
                 files, failed = download_invoices(page, timer, download_all=args.all, booking_refs=booking_refs)
                 _download_amazon(context, unmatched_entries, receipt_files, timer)
+                _download_portals(page, unmatched_entries, receipt_files, timer)
 
                 total = len(booking_refs) if booking_refs else None
                 send_email(files + receipt_files, timer, dry_run=args.dry_run, cc_email=args.cc,
@@ -180,6 +181,7 @@ def main():
 
                 files, failed = download_invoices(page, timer, download_all=args.all, booking_refs=booking_refs)
                 _download_amazon(context, unmatched_entries, receipt_files, timer)
+                _download_portals(page, unmatched_entries, receipt_files, timer)
 
                 total = len(booking_refs) if booking_refs else None
                 send_email(files + receipt_files, timer, dry_run=args.dry_run, cc_email=args.cc,
@@ -204,6 +206,17 @@ def _download_amazon(context, unmatched_entries: list, receipt_files: list, time
     amazon_page.close()
     if amazon_files:
         timer.lap(f"Amazon ({len(amazon_files)} Rechnungen)")
+
+
+def _download_portals(page, unmatched_entries: list, receipt_files: list, timer: Timer):
+    """Rechnungen von Vendor-Portalen herunterladen (über CDP)."""
+    if not unmatched_entries:
+        return
+    from src.portal import download_portal_invoices
+    portal_files = download_portal_invoices(page, unmatched_entries, BELEGE_DIR)
+    receipt_files.extend(portal_files)
+    if portal_files:
+        timer.lap(f"Portale ({len(portal_files)} Rechnungen)")
 
 
 if __name__ == "__main__":

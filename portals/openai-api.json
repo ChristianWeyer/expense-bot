@@ -1,0 +1,18 @@
+{
+    "id": "openai-api",
+    "name": "OpenAI API",
+    "homepage": "https://platform.openai.com",
+    "billing_url": "https://platform.openai.com/settings/organization/billing/history",
+    "auth_check_url": "https://platform.openai.com/settings",
+    "auth_check_selector": "nav",
+    "match_keywords": ["OPENAI"],
+    "invoices": {
+        "selector": "a[href*='stripe.com/invoice'], a[href*='stripe.com/receipt'], a[href*='invoice.stripe.com']",
+        "fields": {
+            "pdf_url": {"selector": "self", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "stripe_url"
+    }
+}

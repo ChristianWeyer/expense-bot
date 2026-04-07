@@ -1,0 +1,21 @@
+{
+    "id": "heise",
+    "name": "Heise Medien",
+    "homepage": "https://www.heise.de",
+    "billing_url": "https://www.heise.de/sso/registration/add_subscriber_id/plenigo?plsnippet=order",
+    "auth_check_url": "https://www.heise.de/sso/registration/add_subscriber_id/plenigo?plsnippet=order",
+    "auth_check_selector": "iframe[src*='selfservice.plenigo.com']",
+    "match_keywords": ["HEISE"],
+    "invoices": {
+        "selector": "[data-test='invoices'] .row:not(.row__title)",
+        "fields": {
+            "date": {"selector": "[data-test$='.date']"},
+            "amount": {"selector": "[data-test$='.price']"},
+            "pdf_url": {"selector": "[data-test$='.downloadPdf']", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "direct_link",
+        "_note": "PDF-URL ist relativ zu selfservice.plenigo.com — muss mit Plenigo-Session aufgerufen werden"
+    }
+}

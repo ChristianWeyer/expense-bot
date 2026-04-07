@@ -1,0 +1,18 @@
+{
+    "id": "spiegel",
+    "name": "Der Spiegel",
+    "homepage": "https://www.spiegel.de",
+    "billing_url": "https://abo.spiegel.de/konto",
+    "auth_check_url": "https://abo.spiegel.de/konto",
+    "auth_check_selector": "[class*='account'], [class*='konto']",
+    "match_keywords": ["SPIEGEL"],
+    "invoices": {
+        "selector": "a[href*='rechnung'], a[href*='invoice'], a:has-text('Rechnung')",
+        "fields": {
+            "pdf_url": {"selector": "self", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "direct_link"
+    }
+}

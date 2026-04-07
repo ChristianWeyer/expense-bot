@@ -1,0 +1,18 @@
+{
+    "id": "audible",
+    "name": "Audible",
+    "homepage": "https://www.audible.de",
+    "billing_url": "https://www.audible.de/account/purchase-history",
+    "auth_check_url": "https://www.audible.de/account",
+    "auth_check_selector": "[class*='account'], [class*='purchase']",
+    "match_keywords": ["AUDIBLE"],
+    "invoices": {
+        "selector": "a[href*='invoice'], a:has-text('Rechnung'), a:has-text('Invoice')",
+        "fields": {
+            "pdf_url": {"selector": "self", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "direct_link"
+    }
+}
