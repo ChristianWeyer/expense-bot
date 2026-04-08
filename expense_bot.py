@@ -212,11 +212,20 @@ def _download_portals(page, unmatched_entries: list, receipt_files: list, timer:
     """Rechnungen von Vendor-Portalen herunterladen (über CDP)."""
     if not unmatched_entries:
         return
+
+    # Generische Portal-Configs (OpenAI, Adobe, etc.)
     from src.portal import download_portal_invoices
     portal_files = download_portal_invoices(page, unmatched_entries, BELEGE_DIR)
     receipt_files.extend(portal_files)
-    if portal_files:
-        timer.lap(f"Portale ({len(portal_files)} Rechnungen)")
+
+    # Dedizierte Scraper für komplexe Portale
+    from src.heise import download_heise_invoices
+    heise_files = download_heise_invoices(page, unmatched_entries, BELEGE_DIR)
+    receipt_files.extend(heise_files)
+
+    total = len(portal_files) + len(heise_files)
+    if total:
+        timer.lap(f"Portale ({total} Rechnungen)")
 
 
 if __name__ == "__main__":
