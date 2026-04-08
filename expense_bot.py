@@ -209,21 +209,44 @@ def _download_amazon(context, unmatched_entries: list, receipt_files: list, time
 
 
 def _download_portals(page, unmatched_entries: list, receipt_files: list, timer: Timer):
-    """Rechnungen von Vendor-Portalen herunterladen (über CDP)."""
+    """Rechnungen von Vendor-Portalen herunterladen (über CDP und API)."""
     if not unmatched_entries:
         return
 
-    # Generische Portal-Configs (OpenAI, Adobe, etc.)
+    total = 0
+
+    # API-basiert (kein Browser nötig)
+    from src.cloudflare import download_cloudflare_invoices
+    cf_files = download_cloudflare_invoices(unmatched_entries, BELEGE_DIR)
+    receipt_files.extend(cf_files)
+    total += len(cf_files)
+
+    # Generische Portal-Configs (OpenAI, Adobe — Stripe-basiert)
     from src.portal import download_portal_invoices
     portal_files = download_portal_invoices(page, unmatched_entries, BELEGE_DIR)
     receipt_files.extend(portal_files)
+    total += len(portal_files)
 
-    # Dedizierte Scraper für komplexe Portale
+    # Dedizierte Scraper
     from src.heise import download_heise_invoices
     heise_files = download_heise_invoices(page, unmatched_entries, BELEGE_DIR)
     receipt_files.extend(heise_files)
+    total += len(heise_files)
 
-    total = len(portal_files) + len(heise_files)
+    # Stripe Portal Scraper (Figma, Perplexity)
+    from src.stripe_portal import download_via_stripe_portal
+    stripe_vendors = [
+        ("Perplexity", "https://www.perplexity.ai/settings/billing", ["PERPLEXITY"]),
+        ("Figma", "https://www.figma.com/settings", ["FIGMA"]),
+    ]
+    for vendor_name, billing_url, keywords in stripe_vendors:
+        vendor_entries = [e for e in unmatched_entries if not e.get("is_credit")
+                         and any(kw in e.get("vendor", "").upper() for kw in keywords)]
+        if vendor_entries:
+            stripe_files = download_via_stripe_portal(page, vendor_name, billing_url, vendor_entries, BELEGE_DIR)
+            receipt_files.extend(stripe_files)
+            total += len(stripe_files)
+
     if total:
         timer.lap(f"Portale ({total} Rechnungen)")
 
