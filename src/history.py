@@ -38,7 +38,7 @@ def is_known_file(filepath: Path, history: set) -> bool:
 
 
 def cleanup_old_invoices(keep_days: int):
-    """Löscht PDFs aus rechnungen/ die älter als keep_days Tage sind."""
+    """Löscht PDFs aus belege/ die älter als keep_days Tage sind."""
     if not DOWNLOAD_DIR.exists():
         return
     cutoff = time.time() - (keep_days * 86400)

@@ -71,8 +71,8 @@ OWN_EMAIL_DOMAIN = os.environ.get("OWN_EMAIL_DOMAIN", "thinktecture.com").strip(
 # ─── Pfade ──────────────────────────────────────────────────
 
 ROOT_DIR = Path(__file__).parent.parent
-DOWNLOAD_DIR = ROOT_DIR / "rechnungen"
-BELEGE_DIR = ROOT_DIR / "belege"
+DOWNLOAD_DIR = ROOT_DIR / "belege"
+BELEGE_DIR = DOWNLOAD_DIR  # Legacy-Alias
 HISTORY_FILE = ROOT_DIR / ".download_history.json"
 TOKEN_CACHE_FILE = ROOT_DIR / ".token_cache.json"
 BROWSER_DATA_DIR = ROOT_DIR / ".browser-data"
