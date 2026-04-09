@@ -18,6 +18,15 @@ def _get_cf_token() -> str | None:
         os.environ.get("OP_CLOUDFLARE_TOKEN", "").strip() or None)
 
 
+def _get_cf_global_key() -> tuple[str | None, str | None]:
+    """Holt Cloudflare Email + Global API Key (für PDF-Download)."""
+    from src.config import _get_secret
+    email = _get_secret("CLOUDFLARE_EMAIL", "op://Private/Cloudflare/username")
+    key = _get_secret("CLOUDFLARE_GLOBAL_API_KEY",
+        os.environ.get("OP_CLOUDFLARE_GLOBAL_KEY", "").strip() or None)
+    return email, key
+
+
 def _get_account_id(token: str) -> str | None:
     """Ermittelt die Cloudflare Account-ID."""
     resp = requests.get(
@@ -86,15 +95,24 @@ def download_cloudflare_invoices(
             if inv.get("_used"):
                 continue
             inv_amount = inv.get("amount", 0)
-            if abs(inv_amount - amount) <= 0.5:
+            # Cloudflare rechnet in USD — MC-Eintrag ist in EUR.
+            # Toleranz: ±30% für Wechselkurs-Schwankungen
+            if abs(inv_amount - amount) <= max(0.5, amount * 0.3):
                 invoice_id = inv.get("id")
                 if not invoice_id:
                     continue
 
-                # PDF herunterladen
+                # PDF herunterladen — braucht Global API Key, nicht Bearer Token
+                cf_email, cf_key = _get_cf_global_key()
+                if cf_email and cf_key:
+                    pdf_headers = {"X-Auth-Email": cf_email, "X-Auth-Key": cf_key}
+                else:
+                    pdf_headers = headers  # Fallback auf Bearer Token
+
                 pdf_resp = requests.get(
                     f"{CF_API_BASE}/accounts/{account_id}/billing/receipts/{invoice_id}/pdf",
-                    headers=headers,
+                    headers=pdf_headers,
+                    params={"doctype": "invoice"},
                     timeout=30,
                 )
 

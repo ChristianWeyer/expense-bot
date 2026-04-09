@@ -34,6 +34,8 @@ Return ONLY a JSON array, no other text."""
 ALL_ENTRIES_PROMPT = """Extract ALL entries from this Mastercard/BusinessCard statement. Check ALL pages carefully.
 Skip subtotals ("Zwischensumme"), carry-overs ("Übertrag"), and currency conversion fee lines ("2% für Währungsumrechnung").
 
+{yellow_instruction}
+
 For each entry return a JSON object with:
 - vendor: the merchant/company name (e.g. "ANTHROPIC", "Amazon.de", "DB Vertrieb GmbH")
 - description: any additional text after the vendor (reference numbers, order IDs, city etc.)
@@ -125,12 +127,26 @@ def extract_db_bookings(pdf_path: str | Path) -> list[dict]:
     return _call_llm(pdf_path, DB_EXTRACTION_PROMPT, max_tokens=4000)
 
 
-def extract_all_entries(pdf_path: str | Path) -> list[dict]:
-    """Extrahiert ALLE Buchungseinträge aus dem Mastercard-PDF."""
+def extract_all_entries(pdf_path: str | Path, marked_only: bool = False) -> list[dict]:
+    """Extrahiert Buchungseinträge aus dem Mastercard-PDF.
+
+    Args:
+        marked_only: Wenn True, nur gelb markierte Einträge extrahieren.
+    """
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF nicht gefunden: {pdf_path}")
-    return _call_llm(pdf_path, ALL_ENTRIES_PROMPT, max_tokens=8000)
+
+    if marked_only:
+        yellow_instruction = (
+            "IMPORTANT: Extract ONLY entries that are highlighted/marked in yellow.\n"
+            "Skip all entries that are NOT highlighted."
+        )
+    else:
+        yellow_instruction = ""
+
+    prompt = ALL_ENTRIES_PROMPT.format(yellow_instruction=yellow_instruction)
+    return _call_llm(pdf_path, prompt, max_tokens=8000)
 
 
 def get_db_entries(entries: list[dict]) -> list[dict]:

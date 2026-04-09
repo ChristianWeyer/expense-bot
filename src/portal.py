@@ -154,8 +154,12 @@ def _download_invoice_pdf(page, invoice: dict, config: dict, download_dir: Path,
         # Stripe Invoice-Seite öffnen und PDF downloaden
         try:
             invoice_page = page.context.new_page()
-            invoice_page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            invoice_page.wait_for_timeout(5000)
+            try:
+                invoice_page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            except Exception:
+                # Timeout ist OK — Stripe lädt manchmal langsam über CDP
+                pass
+            invoice_page.wait_for_timeout(8000)
 
             # "Download invoice" Button klicken
             # Invoice bevorzugen, Receipt nur als Fallback

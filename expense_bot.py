@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--cc", type=str, metavar="EMAIL", default=CC_EMAIL)
     parser.add_argument("--login-only", action="store_true")
     parser.add_argument("--cdp", type=str, metavar="URL", nargs="?", const=CDP_URL or "http://localhost:9222", default=CDP_URL)
+    parser.add_argument("--marked-entries-only", action="store_true",
+                        help="Nur gelb markierte Einträge aus dem MC-PDF extrahieren")
     args = parser.parse_args()
 
     timer = Timer()
@@ -72,7 +74,7 @@ def main():
         result.mc_pdf_name = mc_path.name
         print(f"\n💳 Lese Mastercard-PDF: {mc_path}")
 
-        all_entries = extract_all_entries(str(mc_path))
+        all_entries = extract_all_entries(str(mc_path), marked_only=args.marked_entries_only)
         db_entries = get_db_entries(all_entries)
         non_db_raw = get_non_db_entries(all_entries)
         result.add_entries(all_entries)
@@ -168,13 +170,10 @@ def _fetch_outlook(non_db_raw: list[dict], result: RunResult, timer: Timer):
     for m in outlook_results.get("matched", []):
         entry = m["entry"]
         files = m.get("files", [])
-        url = m.get("receipt_url", "")
         if files:
             result.mark_matched(entry, files, source="outlook",
                                 email_subject=m.get("email_subject", ""))
-        elif url:
-            result.mark_link_only(entry, url, source="outlook",
-                                  email_subject=m.get("email_subject", ""))
+        # Kein PDF → bleibt "pending" → Portal-Scraper versucht es
 
     timer.lap(f"Outlook ({len(outlook_results.get('downloaded_files', []))} PDFs)")
 

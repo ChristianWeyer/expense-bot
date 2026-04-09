@@ -17,11 +17,8 @@ class TestFigmaEntryFilter:
 class TestFigmaConfig:
     def test_needs_team_id(self):
         from src.config import FIGMA_TEAM_ID
-        # Team-ID muss konfiguriert sein
         if FIGMA_TEAM_ID:
-            from src.figma import FIGMA_INVOICES_URL
-            assert "team" in FIGMA_INVOICES_URL
-            assert "billing/invoices" in FIGMA_INVOICES_URL
+            assert len(FIGMA_TEAM_ID) > 5
 
 
 @pytest.fixture

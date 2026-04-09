@@ -97,6 +97,7 @@ VENDOR_KEYWORDS = {
     "PADDLE.NET": ["paddle"],
     "NGROK": ["ngrok"],
     "NOUNPROJECT": ["noun project"],
+    "AI FOR DEVS": ["ai for devs", "ai-for-devs"],
     "HUGGINGFACE": ["huggingface", "hugging face"],
     "LANGCHAIN": ["langchain", "langsmith"],
     "LANGFUSE": ["langfuse"],
@@ -183,9 +184,8 @@ def _score_candidate(msg: dict, vendor_keyword: str, amount: float) -> int:
     if any(p in sender for p in ["billing", "invoice", "receipt", "service@", "noreply@tax"]):
         score += 2
 
-    # Malus: eigene Emails (Bot-generiert)
-    from src.config import OWN_EMAIL_DOMAIN
-    if OWN_EMAIL_DOMAIN and OWN_EMAIL_DOMAIN.lower() in sender:
+    # Malus: Bot-generierte Emails (nicht weitergeleitete!)
+    if "[automatisch]" in subject or "expense bot" in subject:
         score -= 10
 
     # Malus: Newsletter-Absender oder typische Newsletter-Subjects
@@ -246,9 +246,22 @@ def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) ->
 
         time.sleep(0.3)
 
-    # Nach Score sortieren (beste zuerst), Mindest-Score 2 (muss zumindest Rechnungsbegriff haben)
     candidates.sort(key=lambda m: m.get("_score", 0), reverse=True)
-    return [c for c in candidates if c.get("_score", 0) >= 2]
+    # Mindest-Score 2, ABER: Vendor muss im Subject oder Sender vorkommen (Score >= 3)
+    # ODER der Absender muss ein Billing-Absender sein (invoice@, receipts@, billing@)
+    filtered = []
+    for c in candidates:
+        score = c.get("_score", 0)
+        if score < 2:
+            continue
+        # Score 2 allein (nur Receipt-Term, kein Vendor-Match) → zu schwach
+        # Ausnahme: Billing-Absender haben mindestens Score 4 (Receipt-Term + Billing-Sender)
+        if score == 2:
+            sender = (c.get("from", {}).get("emailAddress", {}).get("address") or "").lower()
+            if not any(p in sender for p in ["billing", "invoice", "receipt", "service@"]):
+                continue
+        filtered.append(c)
+    return filtered
 
 
 def _extract_receipt_url(token: str, message_id: str) -> str | None:
@@ -380,10 +393,7 @@ def match_and_download_receipts(
     matched = []
     unmatched = []
     all_files = []
-    # Deduplizierung: Email-ID → Vendor-Keyword. Gleicher Vendor darf dieselbe Email
-    # mehrfach nutzen (z.B. 2 LangChain-Einträge, 1 LangChain-Email).
-    # Verschiedene Vendor dürfen dieselbe Email NICHT nutzen.
-    used_messages = {}  # msg_id → set of vendor keywords
+    used_message_ids = set()  # Dedup nur für Emails OHNE Anhang (Link-only)
 
     # Nur Belastungen (keine Gutschriften)
     debits = [e for e in entries if not e.get("is_credit")]
@@ -396,11 +406,9 @@ def match_and_download_receipts(
         print(f"  [{idx}/{len(debits)}] {vendor:<30s}  {amount:>8.2f} EUR  ({date})")
 
         candidates = search_receipts_for_entry(token, search_folders, entry)
-        # Bereits benutzte Emails ausschließen — aber gleicher Vendor darf wiederverwenden
-        vendor_kw = _get_search_keywords(vendor)[0] if _get_search_keywords(vendor) else vendor.lower()
+        # Emails ohne Anhang nur einmal nutzen (Link-Dedup)
         candidates = [c for c in candidates
-                      if c.get("id") not in used_messages
-                      or vendor_kw in used_messages.get(c.get("id"), set())]
+                      if c.get("_has_attachments") or c.get("id") not in used_message_ids]
         if not candidates:
             print(f"         ⚠️  Kein passender Beleg gefunden")
             unmatched.append(entry)
@@ -432,10 +440,8 @@ def match_and_download_receipts(
         vendor_short = re.sub(r"[^\w]", "", vendor)[:20]
         prefix = f"{date_prefix}{vendor_short}_"
 
-        msg_id = msg["id"]
-        if msg_id not in used_messages:
-            used_messages[msg_id] = set()
-        used_messages[msg_id].add(vendor_kw)
+        if not msg.get("_has_attachments"):
+            used_message_ids.add(msg["id"])
 
         if msg.get("_has_attachments"):
             files = download_attachments(token, msg["id"], download_dir, prefix)
@@ -453,19 +459,9 @@ def match_and_download_receipts(
                 print(f"         ⚠️  Email gefunden aber kein PDF-Anhang")
                 unmatched.append(entry)
         else:
-            # Kein Anhang — versuche Receipt-Link aus dem Email-Body zu extrahieren
-            receipt_url = _extract_receipt_url(token, msg["id"])
-            if receipt_url:
-                print(f"         🔗 {receipt_url}")
-            else:
-                print(f"         ℹ️  Email ohne PDF-Anhang (Beleg vermutlich als Link)")
-            matched.append({
-                "entry": entry,
-                "email_subject": msg.get("subject", ""),
-                "email_id": msg["id"],
-                "files": [],
-                "receipt_url": receipt_url,
-            })
+            # Kein PDF-Anhang → als unmatched weiterreichen (Portal-Scraper versucht es)
+            print(f"         ℹ️  Email ohne PDF → weiter an Portal-Scraper")
+            unmatched.append(entry)
 
         time.sleep(0.3)  # Rate-Limiting
 
