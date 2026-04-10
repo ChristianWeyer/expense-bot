@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 import pytest
 
-from src.outlook import _get_search_keywords, _score_candidate, calc_billing_period, _is_receipt_email
+from src.outlook import (_get_search_keywords, _score_candidate, calc_billing_period,
+                         _is_receipt_email, extract_receipt_url_from_html)
 
 
 # ─── _get_search_keywords tests ────────────────────────────────────
@@ -727,3 +728,87 @@ class TestIsReceiptEmail:
 
     def test_short_body(self):
         assert not _is_receipt_email("Hi")
+
+
+# ─── extract_receipt_url_from_html tests ──────────────────────────
+
+class TestExtractReceiptUrl:
+    """Tests für extract_receipt_url_from_html() — findet Receipt-Download-Links."""
+
+    # ── Links mit Receipt-Keywords in der URL ──
+
+    def test_paddle_receipt_link(self):
+        html = '<a href="https://my.paddle.com/receipt/46136028-159235293/197113901-chre735714feea6">View Receipt</a>'
+        url = extract_receipt_url_from_html(html)
+        assert url is not None
+        assert "paddle.com/receipt" in url
+
+    def test_stripe_invoice_link(self):
+        html = '<a href="https://pay.stripe.com/invoice/acct_123/inv_456/pdf">Download Invoice</a>'
+        url = extract_receipt_url_from_html(html)
+        assert url is not None
+        assert "invoice" in url
+
+    def test_billing_link(self):
+        html = '<a href="https://example.com/billing/download/12345">Get PDF</a>'
+        url = extract_receipt_url_from_html(html)
+        assert url is not None
+        assert "billing" in url
+
+    def test_rechnung_link(self):
+        html = '<a href="https://portal.example.de/rechnung/2026-03.pdf">Rechnung herunterladen</a>'
+        url = extract_receipt_url_from_html(html)
+        assert url is not None
+
+    # ── Links mit Receipt-Keywords im Anchor-Text ──
+
+    def test_anchor_text_receipt(self):
+        html = '<a href="https://example.com/doc/abc123">View your receipt</a>'
+        url = extract_receipt_url_from_html(html)
+        assert url is not None
+        assert "abc123" in url
+
+    def test_anchor_text_download(self):
+        html = '<a href="https://example.com/get/pdf">Download your invoice</a>'
+        url = extract_receipt_url_from_html(html)
+        assert url is not None
+
+    # ── Links die ignoriert werden sollen ──
+
+    def test_unsubscribe_link_skipped(self):
+        html = '<a href="https://example.com/receipt/unsubscribe?id=123">Unsubscribe</a>'
+        assert extract_receipt_url_from_html(html) is None
+
+    def test_privacy_link_skipped(self):
+        html = '<a href="https://example.com/privacy/invoice-policy">Privacy Policy</a>'
+        assert extract_receipt_url_from_html(html) is None
+
+    def test_settings_link_skipped(self):
+        html = '<a href="https://example.com/settings/billing">Manage Settings</a>'
+        assert extract_receipt_url_from_html(html) is None
+
+    def test_mailto_skipped(self):
+        html = '<a href="mailto:billing@example.com">Contact Billing</a>'
+        assert extract_receipt_url_from_html(html) is None
+
+    # ── Kein Link vorhanden ──
+
+    def test_no_links(self):
+        html = "<html><body>Thanks for your payment of $10.00</body></html>"
+        assert extract_receipt_url_from_html(html) is None
+
+    def test_irrelevant_links(self):
+        html = '<a href="https://example.com/blog">Read our blog</a>'
+        assert extract_receipt_url_from_html(html) is None
+
+    def test_empty(self):
+        assert extract_receipt_url_from_html("") is None
+
+    # ── Kontext-basierte Erkennung ──
+
+    def test_context_receipt(self):
+        """Link ohne Receipt-URL, aber 'receipt' im umgebenden Text."""
+        html = '<p>Your receipt is ready.</p><a href="https://example.com/doc/xyz789">Click here</a>'
+        url = extract_receipt_url_from_html(html)
+        assert url is not None
+        assert "xyz789" in url

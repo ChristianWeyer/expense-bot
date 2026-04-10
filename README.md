@@ -77,6 +77,11 @@ Fuer Portale mit Browser-Login (Bahn, Amazon, Google, Adobe, etc.):
 # Browser sichtbar (Debugging)
 ./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --headed
 
+# Einzelnen Scraper testen (parst PDF, fuehrt nur diesen Scraper aus, kein Email-Versand)
+./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --only google
+./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --only amazon
+# Verfuegbar: outlook, bahn, amazon, google, spiegel, audible, heise, adobe, figma, cloudflare, portal
+
 # Ohne run.sh (manuell):
 source .venv/bin/activate
 python expense_bot.py --mc-pdf abrechnung.pdf --cdp http://localhost:9222

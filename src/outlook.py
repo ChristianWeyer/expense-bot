@@ -431,44 +431,50 @@ def search_receipts_for_entry(
     return filtered
 
 
-def _extract_receipt_url(token: str, message_id: str) -> str | None:
-    """Extrahiert einen Receipt/Invoice-Link aus dem Email-Body."""
-    data = _graph_get(
-        f"{GRAPH_BASE}/me/messages/{message_id}",
-        token,
-        {"$select": "body"},
-    )
-    body = (data.get("body", {}).get("content") or "")
+def extract_receipt_url_from_html(html_body: str) -> str | None:
+    """Extrahiert einen Receipt/Invoice-Download-Link aus einem Email-HTML-Body.
 
+    Sucht nach Links deren URL oder Anchor-Text Receipt-Begriffe enthält.
+    Ignoriert Unsubscribe-, Privacy- und Settings-Links.
+    """
     receipt_keywords = ["receipt", "invoice", "billing", "rechnung", "download", "beleg", "order", "bestellung"]
     skip_keywords = ["unsubscribe", "mailto:", "privacy", "terms", "help", "cancel", "settings"]
 
     # Suche 1: Links deren URL Receipt/Invoice-Begriffe enthält
     url_pattern = re.compile(r'href=["\']?(https?://[^"\'>\s]+)', re.IGNORECASE)
-    for match in url_pattern.finditer(body):
+    for match in url_pattern.finditer(html_body):
         url = match.group(1)
         url_lower = url.lower()
         if any(kw in url_lower for kw in receipt_keywords):
             if not any(skip in url_lower for skip in skip_keywords):
                 return url
 
-    # Suche 2: Links deren Anchor-Text oder umgebender Text (±100 Zeichen)
+    # Suche 2: Links deren Anchor-Text oder umgebender Text (±150 Zeichen)
     # Receipt/Invoice-Begriffe enthält.
-    # z.B. "find your receipt <a href="...">here</a>"
     anchor_pattern = re.compile(r'<a\s[^>]*href=["\']?(https?://[^"\'>\s]+)["\']?[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
-    for match in anchor_pattern.finditer(body):
+    for match in anchor_pattern.finditer(html_body):
         url = match.group(1)
         anchor_text = re.sub(r'<[^>]+>', '', match.group(2)).lower().strip()
-        # Kontext: 150 Zeichen vor und nach dem Link
         start = max(0, match.start() - 150)
-        end = min(len(body), match.end() + 150)
-        context = re.sub(r'<[^>]+>', ' ', body[start:end]).lower()
+        end = min(len(html_body), match.end() + 150)
+        context = re.sub(r'<[^>]+>', ' ', html_body[start:end]).lower()
 
         if any(kw in anchor_text or kw in context for kw in receipt_keywords):
             if not any(skip in url.lower() for skip in skip_keywords):
                 return url
 
     return None
+
+
+def _extract_receipt_url(token: str, message_id: str) -> str | None:
+    """Extrahiert einen Receipt/Invoice-Link aus dem Email-Body via Graph API."""
+    data = _graph_get(
+        f"{GRAPH_BASE}/me/messages/{message_id}",
+        token,
+        {"$select": "body"},
+    )
+    body = (data.get("body", {}).get("content") or "")
+    return extract_receipt_url_from_html(body)
 
 
 def _download_receipt_from_link(token: str, message_id: str, download_dir: Path, prefix: str) -> Path | None:
