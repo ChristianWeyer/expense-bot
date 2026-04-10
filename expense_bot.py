@@ -38,10 +38,8 @@ from src.result import RunResult
 
 def _check_credentials(args):
     """Prüft Credentials beim Start und warnt bei fehlenden optionalen Zugangsdaten."""
-    # Required
+    # Required für Email-Versand
     required = [
-        ("BAHN_EMAIL", BAHN_EMAIL),
-        ("BAHN_PASSWORD", BAHN_PASSWORD),
         ("RECIPIENT_EMAIL", RECIPIENT_EMAIL),
         ("AZURE_CLIENT_ID", AZURE_CLIENT_ID),
     ]
@@ -56,6 +54,7 @@ def _check_credentials(args):
 
     # Optional — nur Warnung
     optional = [
+        ("BAHN_EMAIL/BAHN_PASSWORD", BAHN_EMAIL and BAHN_PASSWORD, "Bahn-Scraper wird übersprungen"),
         ("AMAZON_EMAIL/AMAZON_PASSWORD", AMAZON_EMAIL and AMAZON_PASSWORD, "Amazon-Scraper wird übersprungen"),
         ("GOOGLE_EMAIL/GOOGLE_PASSWORD", GOOGLE_EMAIL and GOOGLE_PASSWORD, "Google-Scraper wird übersprungen"),
         ("ADOBE_EMAIL/ADOBE_PASSWORD", ADOBE_EMAIL and ADOBE_PASSWORD, "Adobe-Scraper wird übersprungen"),
