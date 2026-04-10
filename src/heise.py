@@ -1,12 +1,14 @@
 """Heise Medien Rechnungs-Download ueber Plenigo Self-Service Portal."""
 
 import time
+from datetime import datetime
 from pathlib import Path
 
 import requests as http_req
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from src.config import HEISE_EMAIL, HEISE_PASSWORD
+from src.util import parse_date
 
 
 HEISE_URL = "https://www.heise.de/sso/registration/add_subscriber_id/plenigo?plsnippet=order"
@@ -40,6 +42,14 @@ def _login_heise(page, email: str, password: str) -> bool:
     return True
 
 
+def _filter_heise_entries(entries: list[dict]) -> list[dict]:
+    """Filtert Heise-Einträge aus MC-Entries."""
+    return [
+        e for e in entries
+        if not e.get("is_credit") and "HEISE" in e.get("vendor", "").upper()
+    ]
+
+
 def download_heise_invoices(
     page,
     entries: list[dict],
@@ -52,10 +62,7 @@ def download_heise_invoices(
     """
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    heise_entries = [
-        e for e in entries
-        if not e.get("is_credit") and "HEISE" in e.get("vendor", "").upper()
-    ]
+    heise_entries = _filter_heise_entries(entries)
     if not heise_entries:
         return []
 
@@ -102,6 +109,22 @@ def download_heise_invoices(
     if count == 0:
         return []
 
+    # Rechnungsdaten aus der Tabelle extrahieren (Datum steht im Eltern-Container jedes Links)
+    invoice_rows = []
+    for i in range(count):
+        href = pdf_links.nth(i).get_attribute("href") or ""
+        # Datum aus der umgebenden Tabellenzeile extrahieren
+        row_date_str = pdf_links.nth(i).evaluate("""el => {
+            // Suche in der gleichen Zeile oder vorherigen Geschwistern nach einem Datum
+            let row = el.closest('tr, [class*="row"], [class*="item"]');
+            if (row) return row.innerText;
+            // Fallback: vorherige Zeilen im gleichen Container
+            let container = el.parentElement;
+            while (container && container.children.length < 3) container = container.parentElement;
+            return container ? container.innerText : '';
+        }""")
+        invoice_rows.append({"href": href, "context": row_date_str})
+
     cookies = page.context.cookies(PLENIGO_BASE)
     cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
 
@@ -111,30 +134,45 @@ def download_heise_invoices(
     for entry in heise_entries:
         amount = entry.get("amount", 0)
         date_str = entry.get("date", "")
+        entry_date = parse_date(date_str)
         print(f"  Heise  {amount:.2f} EUR  ({date_str})")
 
-        for i in range(count):
-            href = pdf_links.nth(i).get_attribute("href") or ""
-            if href in used_links:
+        # Beste Rechnung per Datum finden
+        best_idx = None
+        best_diff = float('inf')
+        for i, row in enumerate(invoice_rows):
+            if row["href"] in used_links:
                 continue
+            # Datum aus dem Kontext-Text extrahieren
+            row_date = parse_date(row["context"][:8])  # Format "09.04.26" am Anfang
+            if entry_date and row_date:
+                diff = abs((row_date - entry_date).days)
+                if diff <= 14 and diff < best_diff:
+                    best_diff = diff
+                    best_idx = i
 
-            full_url = f"{PLENIGO_BASE}{href}" if href.startswith("/") else href
+        if best_idx is None:
+            print(f"  ⚠️ Keine passende Rechnung gefunden")
+            continue
 
-            try:
-                resp = http_req.get(full_url, headers={"Cookie": cookie_str}, timeout=30)
-                if resp.status_code == 200 and resp.content[:4] == b"%PDF":
-                    date_prefix = date_str.replace(".", "") + "_" if date_str else ""
-                    fname = f"{date_prefix}Heise_Rechnung.pdf"
-                    save_path = download_dir / fname
-                    save_path.write_bytes(resp.content)
-                    results.append((entry, save_path))
-                    used_links.add(href)
-                    print(f"  📎 {fname} ({len(resp.content) / 1024:.1f} KB)")
-                    break
-                else:
-                    print(f"  ❌ HTTP {resp.status_code} beim Download, {len(resp.content)} bytes")
-            except Exception as e:
-                print(f"  ❌ Download fehlgeschlagen: {e}")
+        row = invoice_rows[best_idx]
+        href = row["href"]
+        full_url = f"{PLENIGO_BASE}{href}" if href.startswith("/") else href
+
+        try:
+            resp = http_req.get(full_url, headers={"Cookie": cookie_str}, timeout=30)
+            if resp.status_code == 200 and resp.content[:4] == b"%PDF":
+                date_prefix = date_str.replace(".", "") + "_" if date_str else ""
+                fname = f"{date_prefix}Heise_Rechnung.pdf"
+                save_path = download_dir / fname
+                save_path.write_bytes(resp.content)
+                results.append((entry, save_path))
+                used_links.add(href)
+                print(f"  📎 {fname} ({len(resp.content) / 1024:.1f} KB)")
+            else:
+                print(f"  ❌ HTTP {resp.status_code} beim Download")
+        except Exception as e:
+            print(f"  ❌ Download fehlgeschlagen: {e}")
 
     if results:
         print(f"  ✅ {len(results)} Heise-Rechnung(en) heruntergeladen")

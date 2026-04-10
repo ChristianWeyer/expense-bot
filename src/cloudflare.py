@@ -7,6 +7,8 @@ from pathlib import Path
 
 import requests
 
+from src.util import parse_date
+
 
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
 
@@ -41,6 +43,14 @@ def _get_account_id(token: str) -> str | None:
     return None
 
 
+def _filter_cloudflare_entries(entries: list[dict]) -> list[dict]:
+    """Filtert Cloudflare-Einträge aus MC-Entries."""
+    return [
+        e for e in entries
+        if not e.get("is_credit") and "CLOUDFLARE" in e.get("vendor", "").upper()
+    ]
+
+
 def download_cloudflare_invoices(
     entries: list[dict],
     download_dir: Path,
@@ -52,10 +62,7 @@ def download_cloudflare_invoices(
     """
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    cf_entries = [
-        e for e in entries
-        if not e.get("is_credit") and "CLOUDFLARE" in e.get("vendor", "").upper()
-    ]
+    cf_entries = _filter_cloudflare_entries(entries)
     if not cf_entries:
         return []
 
@@ -92,20 +99,25 @@ def download_cloudflare_invoices(
     for entry in cf_entries:
         amount = entry.get("amount", 0)
         date_str = entry.get("date", "")
+        entry_date = parse_date(date_str)
         print(f"  Cloudflare  {amount:.2f} EUR  ({date_str})")
 
-        # Invoice per Betrag matchen — engere Toleranz (±15% statt ±30%)
+        # Invoice per Datum matchen (Betrag ist USD, nicht vergleichbar mit EUR)
         best_inv = None
         best_diff = float('inf')
         for inv in invoices:
             if inv.get("_used"):
                 continue
-            inv_amount = inv.get("amount", 0)
-            diff = abs(inv_amount - amount)
-            # Toleranz: ±15% für Wechselkurs (USD -> EUR)
-            if diff <= max(0.5, amount * 0.15) and diff < best_diff:
-                best_diff = diff
-                best_inv = inv
+            inv_date_str = inv.get("occurred_at", "")[:10]  # "2026-03-19"
+            try:
+                inv_date = datetime.strptime(inv_date_str, "%Y-%m-%d")
+            except (ValueError, TypeError):
+                continue
+            if entry_date:
+                diff = abs((inv_date - entry_date).days)
+                if diff <= 14 and diff < best_diff:
+                    best_diff = diff
+                    best_inv = inv
 
         if not best_inv:
             print(f"  ⚠️ Keine passende Invoice gefunden")

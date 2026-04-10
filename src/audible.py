@@ -17,6 +17,14 @@ from src.config import AMAZON_EMAIL, AMAZON_PASSWORD
 MEMBERSHIP_URL = "https://www.audible.de/account/purchase-history?tf=membership&df=last_365_days&ps=20"
 
 
+def _filter_audible_entries(entries: list[dict]) -> list[dict]:
+    """Filtert Audible-Einträge aus MC-Entries."""
+    return [
+        e for e in entries
+        if not e.get("is_credit") and "AUDIBLE" in e.get("vendor", "").upper()
+    ]
+
+
 def download_audible_invoices(
     page,
     entries: list[dict],
@@ -29,10 +37,7 @@ def download_audible_invoices(
     """
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    audible_entries = [
-        e for e in entries
-        if not e.get("is_credit") and "AUDIBLE" in e.get("vendor", "").upper()
-    ]
+    audible_entries = _filter_audible_entries(entries)
     if not audible_entries:
         return []
 

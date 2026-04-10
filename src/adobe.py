@@ -123,6 +123,14 @@ def _parse_amount(amount_str: str) -> float | None:
         return None
 
 
+def _filter_adobe_entries(entries: list[dict]) -> list[dict]:
+    """Filtert Adobe-Einträge aus MC-Entries."""
+    return [
+        e for e in entries
+        if not e.get("is_credit") and "ADOBE" in e.get("vendor", "").upper()
+    ]
+
+
 def download_adobe_invoices(
     page,
     entries: list[dict],
@@ -135,10 +143,7 @@ def download_adobe_invoices(
     """
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    adobe_entries = [
-        e for e in entries
-        if not e.get("is_credit") and "ADOBE" in e.get("vendor", "").upper()
-    ]
+    adobe_entries = _filter_adobe_entries(entries)
     if not adobe_entries:
         return []
 

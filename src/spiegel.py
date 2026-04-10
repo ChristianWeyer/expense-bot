@@ -22,6 +22,14 @@ SPIEGEL_EMAIL = _get_secret("SPIEGEL_EMAIL", "op://Shared/Spiegel/username")
 SPIEGEL_PASSWORD = _get_secret("SPIEGEL_PASSWORD", "op://Shared/Spiegel/password")
 
 
+def _filter_spiegel_entries(entries: list[dict]) -> list[dict]:
+    """Filtert Spiegel-Einträge aus MC-Entries."""
+    return [
+        e for e in entries
+        if not e.get("is_credit") and "SPIEGEL" in e.get("vendor", "").upper()
+    ]
+
+
 def _login_spiegel(page, email: str, password: str) -> bool:
     """Login bei Spiegel Gruppenkonto (zweistufig: Email -> Passwort)."""
     print("  🔑 Spiegel Login ...")
@@ -90,10 +98,7 @@ def download_spiegel_invoices(
     """
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    spiegel_entries = [
-        e for e in entries
-        if not e.get("is_credit") and "SPIEGEL" in e.get("vendor", "").upper()
-    ]
+    spiegel_entries = _filter_spiegel_entries(entries)
     if not spiegel_entries:
         return []
 

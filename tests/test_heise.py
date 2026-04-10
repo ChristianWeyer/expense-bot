@@ -2,6 +2,8 @@
 
 import pytest
 
+from src.heise import _filter_heise_entries
+
 
 class TestHeiseEntryFilter:
     def test_filters_heise_entries(self):
@@ -10,7 +12,7 @@ class TestHeiseEntryFilter:
             {"vendor": "HEISE ONLINE", "amount": 5.0, "is_credit": False},
             {"vendor": "ANTHROPIC", "amount": 100.0, "is_credit": False},
         ]
-        heise = [e for e in entries if not e.get("is_credit") and "HEISE" in e.get("vendor", "").upper()]
+        heise = _filter_heise_entries(entries)
         assert len(heise) == 2
 
 

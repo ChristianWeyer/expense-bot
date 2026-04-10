@@ -2,39 +2,33 @@
 
 import pytest
 
+from src.amazon import _filter_amazon_entries
+
 
 class TestAmazonEntryFiltering:
-    """Test the entry filtering logic extracted from download_amazon_invoices."""
-
-    def _filter_amazon(self, entries):
-        return [
-            e for e in entries
-            if not e.get("is_credit")
-            and ("AMZN" in e.get("vendor", "").upper() or "AMAZON" in e.get("vendor", "").upper())
-        ]
+    """Test the entry filtering logic — imports REAL function from src/amazon.py."""
 
     def test_amzn_mktp_matches(self):
         entries = [{"vendor": "AMZN Mktp DE*IT5HF5H85", "amount": 126.03, "is_credit": False}]
-        assert len(self._filter_amazon(entries)) == 1
+        assert len(_filter_amazon_entries(entries)) == 1
 
     def test_amazon_de_matches(self):
         entries = [{"vendor": "Amazon.de VD9CW3W5", "amount": 21.29, "is_credit": False}]
-        assert len(self._filter_amazon(entries)) == 1
+        assert len(_filter_amazon_entries(entries)) == 1
 
     def test_amazon_de_star_matches(self):
         entries = [{"vendor": "Amazon.de*BYOT94N15", "amount": 84.00, "is_credit": False}]
-        assert len(self._filter_amazon(entries)) == 1
+        assert len(_filter_amazon_entries(entries)) == 1
 
     def test_credit_excluded(self):
         entries = [{"vendor": "AMZN Mktp DE", "amount": 10.0, "is_credit": True}]
-        assert len(self._filter_amazon(entries)) == 0
+        assert len(_filter_amazon_entries(entries)) == 0
 
     def test_non_amazon_excluded(self):
         entries = [{"vendor": "ANTHROPIC", "amount": 100.0, "is_credit": False}]
-        assert len(self._filter_amazon(entries)) == 0
+        assert len(_filter_amazon_entries(entries)) == 0
 
     def test_multiple_amazon_entries(self):
-        """The example PDF has 5 Amazon entries with different amounts."""
         entries = [
             {"vendor": "AMZN Mktp DE*IT5HF5H85", "amount": 126.03, "is_credit": False},
             {"vendor": "Amazon.de VD9CW3W5", "amount": 21.29, "is_credit": False},
@@ -42,7 +36,7 @@ class TestAmazonEntryFiltering:
             {"vendor": "Amazon.de*BYOT94N15", "amount": 84.00, "is_credit": False},
             {"vendor": "AMZN Mktp DE*4F6XP6TO5", "amount": 4.99, "is_credit": False},
         ]
-        assert len(self._filter_amazon(entries)) == 5
+        assert len(_filter_amazon_entries(entries)) == 5
 
 
 class TestAmountMatching:

@@ -137,29 +137,116 @@ VENDOR_KEYWORDS = {
     "CLAUDE.AI": ["anthropic", "claude"],
     "AUTHO": ["auth0"],
     "AUTH0": ["auth0"],
+    # ─── Bisher fehlende Vendors ────────────────────────
+    "SLACK": ["slack", "slack billing"],
+    "SUEDDEUTSCHE": ["sueddeutsche", "sz-abo", "süddeutsche"],
+    "APPLE.COM/BILL": ["apple", "apple.com"],
+    "HP INSTANT INK": ["hp instant ink", "hp ink"],
+    "CURSOR": ["cursor", "anysphere"],
+    "GETTOBY": ["toby", "gettoby"],
+    "MENTIMETER": ["mentimeter"],
+    "BITDEFENDER": ["bitdefender"],
+    "2CO.COM": ["bitdefender", "2checkout"],
+    "GITKRAKEN": ["gitkraken"],
+    "LINKEDIN": ["linkedin"],
+    "CEREBRAS": ["cerebras"],
+    "OPENROUTER": ["openrouter"],
+    "SPEAKER DECK": ["speakerdeck", "speaker deck"],
+    "POLYCAM": ["polycam"],
+    "PRAGMATICENGINEER": ["pragmatic engineer"],
+    "TURING POST": ["turing post"],
+    "VINDSURF": ["windsurf", "exafunction"],  # MC-Tippfehler für WINDSURF
+    "AWS": ["aws", "amazon web services"],
+    "SUMUP": ["sumup"],
+    "MB-TICKETS": ["mb-tickets", "mercedes"],
 }
 
 
 def _get_search_keywords(vendor: str) -> list[str]:
-    """Extrahiert Suchbegriffe aus einem Vendor-Namen."""
+    """Extrahiert Suchbegriffe aus einem Vendor-Namen.
+
+    1. Prüft zuerst die explizite VENDOR_KEYWORDS-Map.
+    2. Fallback: bereinigt den MC-Vendor-Namen intelligent:
+       - Entfernt Referenz-IDs, Rechtsformen, Städte, www/TLD
+       - Splittet an Pipe/Stern-Trennzeichen
+       - Gibt den bereinigten Kern-Namen als Suchbegriff zurück
+    """
     vendor_upper = vendor.upper()
     for prefix, keywords in VENDOR_KEYWORDS.items():
         if prefix in vendor_upper:
             return keywords
 
-    # Fallback: erster sinnvoller Begriff aus dem Vendor-Namen
-    # Strip typische Suffixe
-    clean = re.sub(r"\s*(GmbH|AG|Ltd|Inc\.|LLC|INC|S\.R\.O\.|SAN FRANCISCO|BERLIN|DUBLIN|NEW YORK|LONDON|LISBOA|LUXEMBOURG|AMSTERDAM|BROOKLYN|SINGAPORE|BASTROP|MOUNTAIN VIEW|PRAGUE|GUNZENHAUSEN|KARLSRUHE).*", "", vendor, flags=re.IGNORECASE)
-    clean = re.sub(r"[*#].*", "", clean).strip()
+    # ── Fallback: intelligente Bereinigung ──────────────────────
+    clean = vendor
+
+    # Pipe-Separator (z.B. "2CO.COM|BITDEFENDER") → beide Teile
+    if "|" in clean:
+        parts = [p.strip() for p in clean.split("|") if p.strip()]
+        # Den aussagekräftigeren Teil nehmen (längster ohne Zahlen)
+        parts.sort(key=lambda p: (-len(re.sub(r"[^a-zA-Z]", "", p)), p))
+        clean = parts[0] if parts else clean
+
+    # Stern-Separator (z.B. "AMZN Mktp DE*Z11DP7IC4") → Teil vor dem Stern
+    if "*" in clean:
+        clean = clean.split("*")[0].strip()
+
+    # Komma-Separator (z.B. "GITHUB, INC.") → Teil vor dem Komma
+    if "," in clean:
+        clean = clean.split(",")[0].strip()
+
+    # Hash-Separator (z.B. "MICROSOFT#G139383942") → Teil vor dem Hash
+    if "#" in clean:
+        clean = clean.split("#")[0].strip()
+
+    # Rechtsformen, Städte, Länder entfernen
+    clean = re.sub(
+        r"\s*\b(GmbH|AG|Ltd|Inc\.?|LLC|INC|S\.?R\.?O\.?|Co\.?\s*KG|& Co\.?|"
+        r"SAN FRANCISCO|BERLIN|DUBLIN|NEW YORK|LONDON|LISBOA|LUXEMBOURG|"
+        r"AMSTERDAM|BROOKLYN|SINGAPORE|BASTROP|MOUNTAIN VIEW|PRAGUE|"
+        r"GUNZENHAUSEN|KARLSRUHE|DARMSTADT|US|DE)\b.*",
+        "", clean, flags=re.IGNORECASE,
+    ).strip()
+
+    # www. Prefix entfernen
+    clean = re.sub(r"^(?:WWW\.)", "", clean, flags=re.IGNORECASE)
+
+    # Domain-Suffixe entfernen (.COM, .DE, .IO, .AI, .NET, etc.)
+    clean = re.sub(r"\.(COM|DE|IO|AI|NET|ORG|CO)\b/?.*", "", clean, flags=re.IGNORECASE).strip()
+
+    # Alphanumerische Referenz-IDs am Ende entfernen (z.B. "T060V1XRN", "KD 82137639")
+    # Pattern: ein Token am Ende das Ziffern+Buchstaben mischt und >= 5 Zeichen lang ist
+    clean = re.sub(r"\s+[A-Z0-9]{5,}$", "", clean, flags=re.IGNORECASE).strip()
+    # Auch "KD 12345" Muster (Kürzel + Nummer)
+    clean = re.sub(r"\s+[A-Z]{1,3}\s+\d{4,}$", "", clean, flags=re.IGNORECASE).strip()
+
+    # Führendes "THE " entfernen
+    clean = re.sub(r"^THE\s+", "", clean, flags=re.IGNORECASE).strip()
+
+    # Trailing Satzzeichen
+    clean = clean.strip(".,;: ")
+
     if clean and len(clean) >= 3:
         return [clean.lower()]
-    return [vendor.split(",")[0].split("*")[0].strip().lower()]
+
+    # Letzter Fallback: Originalname vor erstem Trennzeichen
+    raw = vendor.split(",")[0].split("*")[0].split("|")[0].split("#")[0].strip()
+    raw = re.sub(r"^(?:WWW\.)", "", raw, flags=re.IGNORECASE)
+    return [raw.lower()] if raw and len(raw) >= 2 else [vendor.lower()]
 
 
 def _parse_date(date_str: str) -> datetime | None:
     """Parst ein Datum — delegiert an zentrale parse_date()."""
     from src.util import parse_date
     return parse_date(date_str)
+
+
+def calc_billing_period(entries: list[dict]) -> tuple[datetime, datetime] | None:
+    """Berechnet den Abrechnungszeitraum aus den Entries (frühestes + spätestes Belegdatum)."""
+    all_dates = [_parse_date(e.get("date", "")) for e in entries]
+    valid_dates = [d for d in all_dates if d is not None]
+    if valid_dates:
+        return (min(valid_dates), max(valid_dates))
+    return None
 
 
 # ─── Mail-Suche und Download ────────────────────────────────────────
@@ -203,7 +290,7 @@ def _score_candidate(msg: dict, vendor_keyword: str, amount: float) -> int:
         score += 1
 
     # Bonus: Absender sieht nach Billing/Service aus
-    if any(p in sender for p in ["billing", "invoice", "receipt", "service@", "noreply@tax"]):
+    if any(p in sender for p in ["billing", "invoice", "receipt", "service@", "aboservice", "feedback@", "noreply@tax"]):
         score += 2
 
     # Malus: Own outgoing email, not a vendor receipt
@@ -227,11 +314,22 @@ def _score_candidate(msg: dict, vendor_keyword: str, amount: float) -> int:
     return score
 
 
-def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) -> list[dict]:
+def search_receipts_for_entry(
+    token: str,
+    folder_ids: list[str],
+    entry: dict,
+    billing_period: tuple[datetime, datetime] | None = None,
+) -> list[dict]:
     """Sucht passende Emails zu einem MC-Eintrag in den angegebenen Ordnern.
 
     Durchsucht ALLE Keywords in ALLEN Ordnern und sammelt Kandidaten,
     statt beim ersten Treffer abzubrechen. Dedupliziert nach Message-ID.
+
+    Args:
+        billing_period: (frühestes_datum, spätestes_datum) des MC-Abrechnungszeitraums.
+            Wenn angegeben, wird das Suchfenster relativ zum gesamten Zeitraum berechnet
+            statt nur relativ zum einzelnen Eintrag. So werden auch Emails gefunden, die
+            kurz vor oder nach dem Abrechnungszeitraum eingegangen sind.
     """
     keywords = _get_search_keywords(entry.get("vendor", ""))
     date = _parse_date(entry.get("date", ""))
@@ -240,9 +338,17 @@ def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) ->
     if not date:
         return []
 
-    # Zeitfenster für Post-Filter
-    date_from = date - timedelta(days=3)
-    date_to = date + timedelta(days=DATE_TOLERANCE)
+    # Zeitfenster für Post-Filter:
+    # Wenn billing_period bekannt: Suche von (frühestes Datum - 7 Tage) bis (spätestes Datum + 14 Tage).
+    # So werden Emails gefunden die VOR der MC-Buchung kommen (z.B. Rechnung am 1., Buchung am 3.)
+    # und solche die NACH dem Abrechnungszeitraum eintreffen (z.B. verspätete Bestätigungen).
+    if billing_period:
+        period_start, period_end = billing_period
+        date_from = period_start - timedelta(days=7)
+        date_to = period_end + timedelta(days=14)
+    else:
+        date_from = date - timedelta(days=3)
+        date_to = date + timedelta(days=DATE_TOLERANCE)
 
     candidates = []
     seen_ids = set()
@@ -346,11 +452,33 @@ def _extract_receipt_url(token: str, message_id: str) -> str | None:
     return None
 
 
-def _save_email_body_as_pdf(token: str, message_id: str, download_dir: Path, prefix: str) -> Path | None:
-    """Speichert den HTML-Body einer Email als PDF (fuer Receipts ohne Anhang).
+def _is_receipt_email(content: str) -> bool:
+    """Prüft ob ein Email-Body tatsächlich eine Rechnung/Beleg enthält.
 
-    Speichert als HTML-Datei. Fuer PDF-Konvertierung kann spaeter
-    Playwright oder ein externer Konverter genutzt werden.
+    Filtert Abo-Bestätigungen, Account-Updates und Newsletter raus.
+    Ein echter Beleg enthält typischerweise einen Betrag (€/$/EUR) oder
+    Rechnungs-Begriffe im Body-Text.
+    """
+    text = re.sub(r'<[^>]+>', ' ', content).lower()
+    text = re.sub(r'\s+', ' ', text)
+
+    # Muss mindestens einen Geldbetrag enthalten (€, $, EUR, USD)
+    has_amount = bool(re.search(r'[\$€]\s*\d|EUR\s*\d|\d[.,]\d{2}\s*(?:€|EUR|\$|USD)', text, re.IGNORECASE))
+
+    # Oder Receipt/Invoice-Begriffe im Body
+    receipt_signals = ["rechnung", "invoice", "receipt", "beleg", "quittung",
+                       "billing statement", "payment received", "amount due",
+                       "total:", "gesamt:", "betrag:", "netto", "brutto",
+                       "mwst", "vat", "tax"]
+    has_receipt_signal = any(s in text for s in receipt_signals)
+
+    return has_amount or has_receipt_signal
+
+
+def _save_email_body_as_pdf(token: str, message_id: str, download_dir: Path, prefix: str) -> Path | None:
+    """Speichert den HTML-Body einer Email als Beleg (nur wenn es ein echter Receipt ist).
+
+    Filtert Abo-Bestätigungen, Account-Updates und Newsletter raus.
     """
     data = _graph_get(
         f"{GRAPH_BASE}/me/messages/{message_id}",
@@ -364,15 +492,26 @@ def _save_email_body_as_pdf(token: str, message_id: str, download_dir: Path, pre
     if not content or len(content) < 100:
         return None
 
-    try:
-        if content_type == "html":
-            fname = f"{prefix}email_receipt.html"
-        else:
-            # Plain text -> wrap in minimal HTML
-            content = f"<html><body><pre style='font-family:sans-serif'>{content}</pre></body></html>"
-            fname = f"{prefix}email_receipt.html"
+    # Prüfe ob der Body tatsächlich Rechnungsinhalte hat
+    if not _is_receipt_email(content):
+        return None
 
+    try:
+        if content_type != "html":
+            content = f"<html><body><pre style='font-family:sans-serif'>{content}</pre></body></html>"
+
+        fname = f"{prefix}email_receipt.html.pdf"
         save_path = download_dir / fname
+
+        # HTML → PDF via Playwright (headless Chromium)
+        pdf_bytes = _html_to_pdf(content)
+        if pdf_bytes:
+            save_path.write_bytes(pdf_bytes)
+            if save_path.stat().st_size > 500:
+                return save_path
+
+        # Fallback: HTML speichern wenn PDF-Konvertierung fehlschlägt
+        save_path = download_dir / f"{prefix}email_receipt.html"
         save_path.write_text(content, encoding="utf-8")
         if save_path.stat().st_size > 100:
             return save_path
@@ -380,6 +519,25 @@ def _save_email_body_as_pdf(token: str, message_id: str, download_dir: Path, pre
         pass
 
     return None
+
+
+_pdf_browser = None
+
+
+def _html_to_pdf(html_content: str) -> bytes | None:
+    """Konvertiert HTML-Content zu PDF via Playwright (shared Browser-Instanz)."""
+    global _pdf_browser
+    try:
+        from playwright.sync_api import sync_playwright
+        if _pdf_browser is None:
+            _pdf_browser = sync_playwright().start().chromium.launch(headless=True)
+        page = _pdf_browser.new_page()
+        page.set_content(html_content, wait_until="networkidle")
+        pdf_bytes = page.pdf(format="A4", margin={"top": "1cm", "bottom": "1cm", "left": "1cm", "right": "1cm"})
+        page.close()
+        return pdf_bytes
+    except Exception:
+        return None
 
 
 def _is_invoice_pdf(pdf_bytes: bytes) -> bool:
@@ -526,6 +684,13 @@ def match_and_download_receipts(
 
     # Nur Belastungen (keine Gutschriften)
     debits = [e for e in entries if not e.get("is_credit")]
+
+    billing_period = calc_billing_period(debits)
+    if billing_period:
+        bp_start = billing_period[0].strftime("%d.%m.%Y")
+        bp_end = billing_period[1].strftime("%d.%m.%Y")
+        print(f"  📅 Abrechnungszeitraum: {bp_start} – {bp_end}")
+
     print(f"  🔍 Suche Belege für {len(debits)} Einträge ...\n")
 
     for idx, entry in enumerate(debits, 1):
@@ -534,7 +699,7 @@ def match_and_download_receipts(
         date = entry.get("date", "")
         print(f"  [{idx}/{len(debits)}] {vendor:<30s}  {amount:>8.2f} EUR  ({date})")
 
-        candidates = search_receipts_for_entry(token, search_folders, entry)
+        candidates = search_receipts_for_entry(token, search_folders, entry, billing_period)
         # Emails ohne Anhang nur einmal nutzen (Link-Dedup)
         candidates = [c for c in candidates
                       if c.get("_has_attachments") or c.get("id") not in used_message_ids]
@@ -569,33 +734,31 @@ def match_and_download_receipts(
         vendor_short = re.sub(r"[^\w]", "", vendor)[:20]
         prefix = f"{date_prefix}{vendor_short}_"
 
-        if not msg.get("_has_attachments"):
-            used_message_ids.add(msg["id"])
-
+        files = []
         if msg.get("_has_attachments"):
             files = download_attachments(token, msg["id"], download_dir, prefix)
-            if files:
-                for f in files:
-                    print(f"         📎 {f.name}")
-                all_files.extend(files)
-                matched.append({
-                    "entry": entry,
-                    "email_subject": msg.get("subject", ""),
-                    "email_id": msg["id"],
-                    "files": files,
-                })
-            else:
-                print(f"         ⚠️ Email gefunden aber kein PDF-Anhang")
-                unmatched.append(entry)
+
+        if files:
+            for f in files:
+                print(f"         📎 {f.name}")
+            all_files.extend(files)
+            used_message_ids.add(msg["id"])
+            matched.append({
+                "entry": entry,
+                "email_subject": msg.get("subject", ""),
+                "email_id": msg["id"],
+                "files": files,
+            })
         else:
-            # Kein PDF-Anhang — versuche Email-Body als PDF zu speichern
-            # (funktioniert gut fuer Google Play Belege, Stripe Receipts, etc.)
+            # Kein (Rechnungs-)PDF-Anhang — versuche Email-Body als HTML zu speichern.
+            # Greift bei: Google Play Belege, Stripe Receipts, Emails mit nur AGB-Anhängen, etc.
             score = msg.get("_score", 0)
             if score >= 4:
                 body_pdf = _save_email_body_as_pdf(token, msg["id"], download_dir, prefix)
                 if body_pdf:
                     print(f"         📎 {body_pdf.name} (aus Email-Body)")
                     all_files.append(body_pdf)
+                    used_message_ids.add(msg["id"])
                     matched.append({
                         "entry": entry,
                         "email_subject": msg.get("subject", ""),
@@ -603,7 +766,7 @@ def match_and_download_receipts(
                         "files": [body_pdf],
                     })
                 else:
-                    print(f"         ⚠️ Email ohne PDF → weiter an Portal-Scraper")
+                    print(f"         ⚠️ Email ohne verwertbaren Inhalt")
                     unmatched.append(entry)
             else:
                 print(f"         Email ohne PDF -> weiter an Portal-Scraper")

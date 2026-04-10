@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime
-from src.adobe import _parse_date, _parse_amount, _parse_entry_date
+from src.adobe import _parse_date, _parse_amount, _parse_entry_date, _filter_adobe_entries
 
 
 class TestParseDate:
@@ -51,13 +51,11 @@ class TestMatchingLogic:
     """Test date-based matching without browser."""
 
     def test_exact_date_match(self):
-        from src.adobe import download_adobe_invoices
-        # Can't test full flow without browser, but verify entry filtering
         entries = [
             {"vendor": "ADOBE *ADOBE, DUBLIN", "amount": 66.45, "date": "21.03.26"},
             {"vendor": "AMAZON", "amount": 10.0, "date": "01.01.26"},
         ]
-        adobe_only = [e for e in entries if "ADOBE" in e.get("vendor", "").upper()]
+        adobe_only = _filter_adobe_entries(entries)
         assert len(adobe_only) == 1
         assert adobe_only[0]["amount"] == 66.45
 
@@ -65,7 +63,7 @@ class TestMatchingLogic:
         entries = [
             {"vendor": "ADOBE *ADOBE", "amount": 66.45, "date": "21.03.26", "is_credit": True},
         ]
-        filtered = [e for e in entries if not e.get("is_credit") and "ADOBE" in e.get("vendor", "").upper()]
+        filtered = _filter_adobe_entries(entries)
         assert len(filtered) == 0
 
 

@@ -79,6 +79,9 @@ def main():
     parser.add_argument("--cdp", type=str, metavar="URL", nargs="?", const=CDP_URL or "http://localhost:9222", default=CDP_URL)
     parser.add_argument("--marked-entries-only", action="store_true",
                         help="Nur gelb markierte Eintraege aus dem MC-PDF extrahieren")
+    parser.add_argument("--only", type=str, metavar="SCRAPER",
+                        help="Nur einen bestimmten Scraper ausfuehren (outlook, bahn, amazon, "
+                             "google, spiegel, audible, heise, adobe, figma, cloudflare, portal)")
     args = parser.parse_args()
 
     # Set up logging to both stdout and log file
@@ -151,83 +154,110 @@ def main():
         if not booking_refs:
             print("Keine DB-Buchungsnummern im PDF gefunden.")
 
+    # -- Welche Scraper laufen? --
+    only = (args.only or "").lower().strip()
+    VALID_SCRAPERS = {"outlook", "bahn", "amazon", "google", "spiegel", "audible",
+                      "heise", "adobe", "figma", "cloudflare", "portal"}
+    if only and only not in VALID_SCRAPERS:
+        print(f"FEHLER: Unbekannter Scraper '{only}'. Verfügbar: {', '.join(sorted(VALID_SCRAPERS))}")
+        sys.exit(1)
+    if only:
+        print(f"\n⚡ Nur Scraper: {only}")
+
+    def _should_run(name: str) -> bool:
+        return not only or only == name
+
     # -- Outlook Belege --
     html_fallbacks = []
-    if non_db_raw:
+    if non_db_raw and _should_run("outlook"):
         html_fallbacks = _fetch_outlook(non_db_raw, result, timer, download_dir=run_dir)
 
     # -- Spiegel (eigener Browser) --
-    if non_db_raw:
+    if non_db_raw and _should_run("spiegel"):
         _fetch_spiegel(non_db_raw, result, timer, args.headed, download_dir=run_dir)
 
-    # -- Browser-Automation --
-    with sync_playwright() as p:
-        use_cdp = False
-        browser = None
+    # -- Browser-Automation (nur wenn ein CDP-Scraper laufen soll) --
+    cdp_scrapers = {"bahn", "amazon", "google", "audible", "heise", "adobe", "figma", "cloudflare", "portal"}
+    needs_cdp = not only or only in cdp_scrapers
 
-        if args.cdp:
-            print(f"\nVerbinde mit Chrome ueber CDP: {args.cdp}")
-            try:
-                browser = p.chromium.connect_over_cdp(args.cdp)
-                use_cdp = True
-                timer.lap("Chrome-Verbindung (CDP)")
-            except Exception:
-                print("   CDP nicht erreichbar – starte eigenen Browser ...")
+    if needs_cdp:
+        with sync_playwright() as p:
+            use_cdp = False
+            browser = None
 
-        if use_cdp and browser:
-            context = browser.contexts[0] if browser.contexts else browser.new_context(
-                accept_downloads=True, locale="de-DE")
-            page = context.new_page()
-            try:
-                login(page, timer)
-                if args.login_only:
-                    print(f"\nLogin erfolgreich!\nFertig: {timer.elapsed()}")
-                    return
+            if args.cdp:
+                print(f"\nVerbinde mit Chrome ueber CDP: {args.cdp}")
+                try:
+                    browser = p.chromium.connect_over_cdp(args.cdp)
+                    use_cdp = True
+                    timer.lap("Chrome-Verbindung (CDP)")
+                except Exception:
+                    print("   CDP nicht erreichbar – starte eigenen Browser ...")
 
-                _fetch_bahn(page, timer, result, booking_refs, args.all, download_dir=run_dir)
-                _fetch_amazon(context, result, timer, download_dir=run_dir)
-                _fetch_portals(page, result, timer, download_dir=run_dir)
-            finally:
-                page.close()
-                browser.close()
-        else:
-            BROWSER_DATA_DIR.mkdir(exist_ok=True)
-            print("\nStarte headless Browser ...")
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=str(BROWSER_DATA_DIR),
-                headless=not args.headed, accept_downloads=True, locale="de-DE")
-            page = context.new_page()
-            try:
-                login(page, timer)
-                if args.login_only:
-                    print("\nLogin erfolgreich! ENTER zum Schliessen ...")
-                    input()
+            if use_cdp and browser:
+                context = browser.contexts[0] if browser.contexts else browser.new_context(
+                    accept_downloads=True, locale="de-DE")
+                page = context.new_page()
+                try:
+                    if _should_run("bahn"):
+                        login(page, timer)
+                    if args.login_only:
+                        print(f"\nLogin erfolgreich!\nFertig: {timer.elapsed()}")
+                        return
+
+                    if _should_run("bahn"):
+                        _fetch_bahn(page, timer, result, booking_refs, args.all, download_dir=run_dir)
+                    if _should_run("amazon"):
+                        _fetch_amazon(context, result, timer, download_dir=run_dir)
+                    if not only:
+                        _fetch_portals(page, result, timer, download_dir=run_dir)
+                    else:
+                        _fetch_portals_single(page, result, timer, only, download_dir=run_dir)
+                finally:
+                    page.close()
+                    browser.close()
+            else:
+                BROWSER_DATA_DIR.mkdir(exist_ok=True)
+                print("\nStarte headless Browser ...")
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=str(BROWSER_DATA_DIR),
+                    headless=not args.headed, accept_downloads=True, locale="de-DE")
+                page = context.new_page()
+                try:
+                    if _should_run("bahn"):
+                        login(page, timer)
+                    if args.login_only:
+                        print("\nLogin erfolgreich! ENTER zum Schliessen ...")
+                        input()
+                        context.close()
+                        print(f"\nFertig: {timer.elapsed()}")
+                        return
+
+                    if _should_run("bahn"):
+                        _fetch_bahn(page, timer, result, booking_refs, args.all, download_dir=run_dir)
+                    if _should_run("amazon"):
+                        _fetch_amazon(context, result, timer, download_dir=run_dir)
+                    if not only:
+                        _fetch_portals(page, result, timer, download_dir=run_dir)
+                    else:
+                        _fetch_portals_single(page, result, timer, only, download_dir=run_dir)
+                finally:
                     context.close()
-                    print(f"\nFertig: {timer.elapsed()}")
-                    return
-
-                _fetch_bahn(page, timer, result, booking_refs, args.all, download_dir=run_dir)
-                _fetch_amazon(context, result, timer, download_dir=run_dir)
-                _fetch_portals(page, result, timer, download_dir=run_dir)
-            finally:
-                context.close()
 
     # -- HTML-Fallbacks anwenden (Outlook Email-Body als letzter Ausweg) --
     if html_fallbacks:
         applied = 0
+        discarded_files = []
         for m in html_fallbacks:
             entry = m["entry"]
             files = m.get("files", [])
-            # Nur anwenden wenn Entry noch pending ist (kein Portal-Scraper hat eine PDF geliefert)
             er = result.find_entry(entry.get("_id", ""))
             if not er:
-                # Fallback 1: per object identity
                 for candidate in result.entries:
                     if candidate.entry is entry:
                         er = candidate
                         break
             if not er:
-                # Fallback 2: per vendor+amount+date triple (wie mark_matched)
                 candidates = [
                     c for c in result.entries
                     if (c.status == "pending"
@@ -241,8 +271,17 @@ def main():
                 result.mark_matched(entry, files, source="outlook:html",
                                     email_subject=m.get("email_subject", ""))
                 applied += 1
+            else:
+                # Entry wurde von Portal-Scraper als PDF geholt → HTML-Datei löschen
+                discarded_files.extend(files)
+        # Verwaiste HTML-Dateien aufräumen
+        for f in discarded_files:
+            if f.exists() and (".html" in str(f)):
+                f.unlink(missing_ok=True)
         if applied:
             print(f"\n  {applied} Outlook HTML-Fallback(s) angewendet (kein Portal-PDF gefunden)")
+        if discarded_files:
+            print(f"  {len(discarded_files)} verwaiste HTML-Datei(en) entfernt (Portal-PDF vorhanden)")
 
     # -- Pending -> Unmatched (mit Diagnostik) --
     for er in result.entries:
@@ -251,11 +290,14 @@ def main():
             if not er.note:
                 er.note = "Kein Scraper/Email-Match gefunden"
 
-    # -- Email --
+    # -- Email (nur bei vollem Run) --
     print(f"\n{result.summary()}")
-    send_email(result, timer, dry_run=args.dry_run, cc_email=args.cc)
-
-    cleanup_old_invoices(KEEP_DAYS)
+    if only:
+        print(f"\n⚡ Nur '{only}' getestet — kein Email-Versand")
+        print(f"  Belege in: {run_dir}")
+    else:
+        send_email(result, timer, dry_run=args.dry_run, cc_email=args.cc)
+        cleanup_old_invoices(KEEP_DAYS)
     print(f"\nFertig! Gesamtzeit: {timer.elapsed()}")
 
 
@@ -280,7 +322,7 @@ def _fetch_outlook(non_db_raw: list[dict], result: RunResult, timer: Timer, *, d
             continue
 
         # Prüfe ob NUR HTML-Body (kein echtes PDF) — dann als Fallback merken
-        has_real_pdf = any(not str(f).endswith(".html") for f in files)
+        has_real_pdf = any(".html" not in str(f) for f in files)
         if has_real_pdf:
             result.mark_matched(entry, files, source="outlook",
                                 email_subject=m.get("email_subject", ""))
@@ -413,6 +455,51 @@ def _fetch_portals(page, result: RunResult, timer: Timer, *, download_dir: Path)
 
     if total:
         timer.lap(f"Portale ({total} Rechnungen)")
+
+
+def _fetch_portals_single(page, result: RunResult, timer: Timer, scraper: str, *, download_dir: Path):
+    """Führt einen einzelnen Portal-Scraper aus (für --only Modus)."""
+    pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
+    total = 0
+
+    if scraper == "cloudflare":
+        from src.cloudflare import download_cloudflare_invoices
+        for entry, filepath in download_cloudflare_invoices(pending, download_dir):
+            result.mark_matched(entry, [filepath], source="cloudflare-api")
+            total += 1
+    elif scraper == "portal":
+        from src.portal import download_portal_invoices
+        for entry, filepath, pid in download_portal_invoices(page, pending, download_dir):
+            result.mark_matched(entry, [filepath], source=f"portal:{pid}")
+            total += 1
+    elif scraper == "heise":
+        from src.heise import download_heise_invoices
+        for entry, filepath in download_heise_invoices(page, pending, download_dir):
+            result.mark_matched(entry, [filepath], source="heise")
+            total += 1
+    elif scraper == "adobe":
+        from src.adobe import download_adobe_invoices
+        for entry, filepath in download_adobe_invoices(page, pending, download_dir):
+            result.mark_matched(entry, [filepath], source="adobe")
+            total += 1
+    elif scraper == "figma":
+        from src.figma import download_figma_invoices
+        for entry, filepath in download_figma_invoices(page, pending, download_dir):
+            result.mark_matched(entry, [filepath], source="figma")
+            total += 1
+    elif scraper == "google":
+        from src.google import download_google_invoices
+        for entry, filepath in download_google_invoices(page, pending, download_dir):
+            result.mark_matched(entry, [filepath], source="google")
+            total += 1
+    elif scraper == "audible":
+        from src.audible import download_audible_invoices
+        for entry, filepath in download_audible_invoices(page, pending, download_dir):
+            result.mark_matched(entry, [filepath], source="audible")
+            total += 1
+
+    if total:
+        timer.lap(f"{scraper} ({total} Rechnungen)")
 
 
 if __name__ == "__main__":

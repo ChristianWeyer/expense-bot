@@ -152,6 +152,15 @@ def _collect_orders(page) -> list[dict]:
     return orders
 
 
+def _filter_amazon_entries(entries: list[dict]) -> list[dict]:
+    """Filtert Amazon-Einträge aus MC-Entries."""
+    return [
+        e for e in entries
+        if not e.get("is_credit")
+        and ("AMZN" in e.get("vendor", "").upper() or "AMAZON" in e.get("vendor", "").upper())
+    ]
+
+
 def download_amazon_invoices(
     page,
     entries: list[dict],
@@ -166,11 +175,7 @@ def download_amazon_invoices(
     """
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    amazon_entries = [
-        e for e in entries
-        if not e.get("is_credit")
-        and ("AMZN" in e.get("vendor", "").upper() or "AMAZON" in e.get("vendor", "").upper())
-    ]
+    amazon_entries = _filter_amazon_entries(entries)
     if not amazon_entries:
         return []
 
