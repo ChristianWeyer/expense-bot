@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 Expense Bot — Orchestrator
+
+Parst Mastercard-PDFs, sucht und lädt Belege/Rechnungen aus verschiedenen
+Quellen, und versendet einen konsolidierten Report per Email.
 """
 
 import argparse
@@ -33,7 +36,7 @@ def main():
     parser.add_argument("--login-only", action="store_true")
     parser.add_argument("--cdp", type=str, metavar="URL", nargs="?", const=CDP_URL or "http://localhost:9222", default=CDP_URL)
     parser.add_argument("--marked-entries-only", action="store_true",
-                        help="Nur gelb markierte Einträge aus dem MC-PDF extrahieren")
+                        help="Nur gelb markierte Eintraege aus dem MC-PDF extrahieren")
     args = parser.parse_args()
 
     timer = Timer()
@@ -44,14 +47,14 @@ def main():
         ("RECIPIENT_EMAIL", RECIPIENT_EMAIL), ("AZURE_CLIENT_ID", AZURE_CLIENT_ID),
     ] if not val]
     if missing:
-        print(f"❌ Fehlende Umgebungsvariablen: {', '.join(missing)}")
+        print(f"Fehlende Umgebungsvariablen: {', '.join(missing)}")
         sys.exit(1)
 
     print("=" * 50)
-    print("💼 Expense Bot")
+    print("Expense Bot")
     print("=" * 50)
 
-    # ── MC-PDF parsen ──
+    # -- MC-PDF parsen --
     booking_refs = None
     non_db_raw = []
 
@@ -65,14 +68,14 @@ def main():
                 key=lambda p: p.stat().st_mtime, reverse=True,
             )
             if not pdf_files:
-                print(f"⚠️  Keine PDF-Dateien im Ordner: {mc_path}")
+                print(f"Keine PDF-Dateien im Ordner: {mc_path}")
                 return
             mc_path = pdf_files[0]
-            print(f"\n📂 Ordner: {args.mc_pdf}")
+            print(f"\nOrdner: {args.mc_pdf}")
             print(f"   Neuestes PDF: {mc_path.name}")
 
         result.mc_pdf_name = mc_path.name
-        print(f"\n💳 Lese Mastercard-PDF: {mc_path}")
+        print(f"\nLese Mastercard-PDF: {mc_path}")
 
         all_entries = extract_all_entries(str(mc_path), marked_only=args.marked_entries_only)
         db_entries = get_db_entries(all_entries)
@@ -84,29 +87,29 @@ def main():
         timer.lap("PDF-Parsing")
 
         if not booking_refs:
-            print("⚠️  Keine DB-Buchungsnummern im PDF gefunden.")
+            print("Keine DB-Buchungsnummern im PDF gefunden.")
 
-    # ── Outlook Belege ──
+    # -- Outlook Belege --
     if non_db_raw:
         _fetch_outlook(non_db_raw, result, timer)
 
-    # ── Spiegel (eigener Browser) ──
+    # -- Spiegel (eigener Browser) --
     if non_db_raw:
         _fetch_spiegel(non_db_raw, result, timer, args.headed)
 
-    # ── Browser-Automation ──
+    # -- Browser-Automation --
     with sync_playwright() as p:
         use_cdp = False
         browser = None
 
         if args.cdp:
-            print(f"\n🔗 Verbinde mit Chrome über CDP: {args.cdp}")
+            print(f"\nVerbinde mit Chrome ueber CDP: {args.cdp}")
             try:
                 browser = p.chromium.connect_over_cdp(args.cdp)
                 use_cdp = True
                 timer.lap("Chrome-Verbindung (CDP)")
             except Exception:
-                print("   ⚠️  CDP nicht erreichbar – starte eigenen Browser ...")
+                print("   CDP nicht erreichbar – starte eigenen Browser ...")
 
         if use_cdp and browser:
             context = browser.contexts[0] if browser.contexts else browser.new_context(
@@ -115,7 +118,7 @@ def main():
             try:
                 login(page, timer)
                 if args.login_only:
-                    print(f"\n✅ Login erfolgreich!\n✨ Fertig: {timer.elapsed()}")
+                    print(f"\nLogin erfolgreich!\nFertig: {timer.elapsed()}")
                     return
 
                 _fetch_bahn(page, timer, result, booking_refs, args.all)
@@ -126,7 +129,7 @@ def main():
                 browser.close()
         else:
             BROWSER_DATA_DIR.mkdir(exist_ok=True)
-            print("\n🌐 Starte headless Browser ...")
+            print("\nStarte headless Browser ...")
             context = p.chromium.launch_persistent_context(
                 user_data_dir=str(BROWSER_DATA_DIR),
                 headless=not args.headed, accept_downloads=True, locale="de-DE")
@@ -134,10 +137,10 @@ def main():
             try:
                 login(page, timer)
                 if args.login_only:
-                    print("\n✅ Login erfolgreich! ENTER zum Schließen ...")
+                    print("\nLogin erfolgreich! ENTER zum Schliessen ...")
                     input()
                     context.close()
-                    print(f"\n✨ Fertig: {timer.elapsed()}")
+                    print(f"\nFertig: {timer.elapsed()}")
                     return
 
                 _fetch_bahn(page, timer, result, booking_refs, args.all)
@@ -146,20 +149,22 @@ def main():
             finally:
                 context.close()
 
-    # ── Pending → Unmatched ──
+    # -- Pending -> Unmatched (mit Diagnostik) --
     for er in result.entries:
-        if er.status == "pending" and not er.is_credit:
+        if er.status == "pending" and not er.is_credit and not er.is_fx_fee:
             er.status = "unmatched"
+            if not er.note:
+                er.note = "Kein Scraper/Email-Match gefunden"
 
-    # ── Email ──
-    print(f"\n📊 {result.summary()}")
+    # -- Email --
+    print(f"\n{result.summary()}")
     send_email(result, timer, dry_run=args.dry_run, cc_email=args.cc)
 
     cleanup_old_invoices(KEEP_DAYS)
-    print(f"\n✨ Fertig! Gesamtzeit: {timer.elapsed()}")
+    print(f"\nFertig! Gesamtzeit: {timer.elapsed()}")
 
 
-# ─── Fetch-Funktionen mit direkter Result-Zuordnung ─────────────────
+# --- Fetch-Funktionen mit direkter Result-Zuordnung ---
 
 def _fetch_outlook(non_db_raw: list[dict], result: RunResult, timer: Timer):
     """Outlook Belege suchen und direkt im Result tracken."""
@@ -173,7 +178,6 @@ def _fetch_outlook(non_db_raw: list[dict], result: RunResult, timer: Timer):
         if files:
             result.mark_matched(entry, files, source="outlook",
                                 email_subject=m.get("email_subject", ""))
-        # Kein PDF → bleibt "pending" → Portal-Scraper versucht es
 
     timer.lap(f"Outlook ({len(outlook_results.get('downloaded_files', []))} PDFs)")
 
@@ -184,6 +188,7 @@ def _fetch_bahn(page, timer: Timer, result: RunResult, booking_refs: list[str] |
 
     # Zuordnung: Dateiname enthält die Booking-Ref
     for f in files:
+        matched = False
         for er in result.entries:
             if er.is_db and er.status == "pending" and not er.is_credit:
                 ref = er.entry.get("booking_ref", "")
@@ -191,7 +196,11 @@ def _fetch_bahn(page, timer: Timer, result: RunResult, booking_refs: list[str] |
                     er.status = "matched"
                     er.files = [f]
                     er.source = "bahn.de"
+                    matched = True
                     break
+        if not matched:
+            # Datei existiert, aber kein Entry-Match -> loggen
+            print(f"  WARNUNG: DB-PDF {f.name} konnte keinem Eintrag zugeordnet werden")
 
     for ref in failed:
         for er in result.entries:
@@ -202,7 +211,7 @@ def _fetch_bahn(page, timer: Timer, result: RunResult, booking_refs: list[str] |
 
 
 def _fetch_amazon(context, result: RunResult, timer: Timer):
-    """Amazon Rechnungen downloaden — Scraper gibt (entry, file) Paare zurück."""
+    """Amazon Rechnungen downloaden — Scraper gibt (entry, file) Paare zurueck."""
     pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
     amazon_entries = [e for e in pending
                       if "AMZN" in e.get("vendor", "").upper() or "AMAZON" in e.get("vendor", "").upper()]
@@ -211,35 +220,24 @@ def _fetch_amazon(context, result: RunResult, timer: Timer):
 
     from src.amazon import download_amazon_invoices
     amazon_page = context.new_page()
-    amazon_files = download_amazon_invoices(amazon_page, amazon_entries, BELEGE_DIR, AMAZON_EMAIL, AMAZON_PASSWORD)
+    amazon_results = download_amazon_invoices(amazon_page, amazon_entries, BELEGE_DIR, AMAZON_EMAIL, AMAZON_PASSWORD)
     amazon_page.close()
 
-    # Amazon gibt list[Path] zurück — zuordnen per Reihenfolge (1:1 Mapping)
-    amazon_pending = [er for er in result.entries
-                      if er.status == "pending" and not er.is_credit
-                      and ("AMZN" in er.vendor.upper() or "AMAZON" in er.vendor.upper())]
-    for f, er in zip(amazon_files, amazon_pending):
-        er.status = "matched"
-        er.files = [f]
-        er.source = "amazon.de"
+    for entry, filepath in amazon_results:
+        result.mark_matched(entry, [filepath], source="amazon.de")
 
-    if amazon_files:
-        timer.lap(f"Amazon ({len(amazon_files)} Rechnungen)")
+    if amazon_results:
+        timer.lap(f"Amazon ({len(amazon_results)} Rechnungen)")
 
 
 def _fetch_spiegel(non_db_raw: list[dict], result: RunResult, timer: Timer, headed: bool):
     """Spiegel Rechnung — eigener Browser-Context."""
     from src.spiegel import download_spiegel_invoices
-    spiegel_files = download_spiegel_invoices(non_db_raw, BELEGE_DIR, headed=headed)
-    for f in spiegel_files:
-        for er in result.entries:
-            if er.status == "pending" and "SPIEGEL" in er.vendor.upper():
-                er.status = "matched"
-                er.files = [f]
-                er.source = "spiegel"
-                break
-    if spiegel_files:
-        timer.lap(f"Spiegel ({len(spiegel_files)} PDFs)")
+    spiegel_results = download_spiegel_invoices(non_db_raw, BELEGE_DIR, headed=headed)
+    for entry, filepath in spiegel_results:
+        result.mark_matched(entry, [filepath], source="spiegel")
+    if spiegel_results:
+        timer.lap(f"Spiegel ({len(spiegel_results)} PDFs)")
 
 
 def _fetch_portals(page, result: RunResult, timer: Timer):
@@ -249,93 +247,50 @@ def _fetch_portals(page, result: RunResult, timer: Timer):
     # Cloudflare (API, kein Browser)
     from src.cloudflare import download_cloudflare_invoices
     pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
-    cf_files = download_cloudflare_invoices(pending, BELEGE_DIR)
-    for f in cf_files:
-        for er in result.entries:
-            if er.status == "pending" and "CLOUDFLARE" in er.vendor.upper():
-                er.status = "matched"
-                er.files = [f]
-                er.source = "cloudflare-api"
-                break
-    total += len(cf_files)
+    cf_results = download_cloudflare_invoices(pending, BELEGE_DIR)
+    for entry, filepath in cf_results:
+        result.mark_matched(entry, [filepath], source="cloudflare-api")
+    total += len(cf_results)
 
     # OpenAI + Adobe (Portal JSON configs)
     from src.portal import download_portal_invoices
     pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
     portal_results = download_portal_invoices(page, pending, BELEGE_DIR)
-    # Portal gibt list[Path] zurück — wir müssen die Zuordnung per Vendor-Name machen
-    # Besser: den Portal-Scraper so anpassen dass er (entry, file) zurückgibt
-    # Für jetzt: per Config-ID zuordnen
-    # Portal gibt Dateien zurück in der Reihenfolge der Portal-Configs.
-    # Zuordnung: per Vendor-Match aus der Config die das PDF generiert hat.
-    from src.portal import load_portal_configs, _match_vendor
-    configs = load_portal_configs()
-    for f in portal_results:
-        # Finde welcher Config-Vendor zu dieser Datei gehört (per Name im Dateinamen)
-        for config in configs:
-            config_name = config.get("name", "").upper()
-            if any(part in f.name.upper() for part in config_name.split()[:1]):
-                # Finde passenden pending Entry
-                for er in result.entries:
-                    if er.status == "pending" and not er.is_credit and _match_vendor(config, er.vendor):
-                        er.status = "matched"
-                        er.files = [f]
-                        er.source = f"portal:{config['id']}"
-                        break
-                break
+    for entry, filepath, portal_id in portal_results:
+        result.mark_matched(entry, [filepath], source=f"portal:{portal_id}")
     total += len(portal_results)
 
     # Heise
     from src.heise import download_heise_invoices
     pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
-    heise_files = download_heise_invoices(page, pending, BELEGE_DIR)
-    for f in heise_files:
-        for er in result.entries:
-            if er.status == "pending" and "HEISE" in er.vendor.upper():
-                er.status = "matched"
-                er.files = [f]
-                er.source = "heise"
-                break
-    total += len(heise_files)
+    heise_results = download_heise_invoices(page, pending, BELEGE_DIR)
+    for entry, filepath in heise_results:
+        result.mark_matched(entry, [filepath], source="heise")
+    total += len(heise_results)
 
     # Figma
     from src.figma import download_figma_invoices
     pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
-    figma_files = download_figma_invoices(page, pending, BELEGE_DIR)
-    for f in figma_files:
-        for er in result.entries:
-            if er.status == "pending" and "FIGMA" in er.vendor.upper():
-                er.status = "matched"
-                er.files = [f]
-                er.source = "figma"
-                break
-    total += len(figma_files)
+    figma_results = download_figma_invoices(page, pending, BELEGE_DIR)
+    for entry, filepath in figma_results:
+        result.mark_matched(entry, [filepath], source="figma")
+    total += len(figma_results)
 
     # Google (CDP iframe)
     from src.google import download_google_invoices
     pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
-    google_files = download_google_invoices(page, pending, BELEGE_DIR)
-    for f in google_files:
-        for er in result.entries:
-            if er.status == "pending" and any(k in er.vendor.upper() for k in ["GOOGLE", "YOUTUBE"]):
-                er.status = "matched"
-                er.files = [f]
-                er.source = "google"
-                break
-    total += len(google_files)
+    google_results = download_google_invoices(page, pending, BELEGE_DIR)
+    for entry, filepath in google_results:
+        result.mark_matched(entry, [filepath], source="google")
+    total += len(google_results)
 
     # Audible
     from src.audible import download_audible_invoices
     pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
-    audible_files = download_audible_invoices(page, pending, BELEGE_DIR)
-    for f in audible_files:
-        for er in result.entries:
-            if er.status == "pending" and "AUDIBLE" in er.vendor.upper():
-                er.status = "matched"
-                er.files = [f]
-                er.source = "audible"
-                break
-    total += len(audible_files)
+    audible_results = download_audible_invoices(page, pending, BELEGE_DIR)
+    for entry, filepath in audible_results:
+        result.mark_matched(entry, [filepath], source="audible")
+    total += len(audible_results)
 
     if total:
         timer.lap(f"Portale ({total} Rechnungen)")

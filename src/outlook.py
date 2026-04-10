@@ -80,7 +80,8 @@ def find_mail_folder(token: str, folder_name: str = BELEGE_FOLDER) -> str | None
 # Mapping von MC-Vendor-Namen zu Suchbegriffen für die Mailsuche
 VENDOR_KEYWORDS = {
     "ANTHROPIC": ["anthropic", "claude"],
-    "OPENAI": ["openai", "chatgpt"],
+    "OPENAI *CHATGPT": ["chatgpt", "chatgpt subscription"],
+    "OPENAI": ["openai"],
     "GITHUB": ["github"],
     "FIGMA": ["figma"],
     "MICROSOFT": ["microsoft", "msbill"],
@@ -94,6 +95,10 @@ VENDOR_KEYWORDS = {
     "RENDER.COM": ["render"],
     "AUTH0": ["auth0"],
     "TAILSCALE": ["tailscale"],
+    "PADDLE.NET* JUMA": ["juma"],
+    "PADDLE.NET* REMOVE": ["remove.bg", "kaleido"],
+    "PADDLE.NET* LORDICON": ["lordicon"],
+    "PADDLE.NET* SPD2": ["voila", "spd2"],
     "PADDLE.NET": ["paddle"],
     "NGROK": ["ngrok"],
     "NOUNPROJECT": ["noun project"],
@@ -117,8 +122,13 @@ VENDOR_KEYWORDS = {
     "PAYPAL": ["paypal"],
     "FRAENK": ["fraenk"],
     "MOL*OBJECTIVE": ["objective development", "obdev"],
-    "VACHETE": ["wachete"],
+    "WACHETE": ["wachete"],
     "X CORP": ["receipt from x", "x premium", "twitter"],
+    "LATENT.SPACE": ["latent space", "swyx"],
+    "HOLIDAY INN": ["holiday inn", "ihg"],
+    "CLAUDE.AI": ["anthropic", "claude"],
+    "AUTHO": ["auth0"],
+    "AUTH0": ["auth0"],
 }
 
 
@@ -202,7 +212,11 @@ def _score_candidate(msg: dict, vendor_keyword: str, amount: float) -> int:
 
 
 def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) -> list[dict]:
-    """Sucht passende Emails zu einem MC-Eintrag in den angegebenen Ordnern."""
+    """Sucht passende Emails zu einem MC-Eintrag in den angegebenen Ordnern.
+
+    Durchsucht ALLE Keywords in ALLEN Ordnern und sammelt Kandidaten,
+    statt beim ersten Treffer abzubrechen. Dedupliziert nach Message-ID.
+    """
     keywords = _get_search_keywords(entry.get("vendor", ""))
     date = _parse_date(entry.get("date", ""))
     amount = entry.get("amount", 0)
@@ -215,6 +229,8 @@ def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) ->
     date_to = date + timedelta(days=DATE_TOLERANCE)
 
     candidates = []
+    seen_ids = set()
+
     for keyword in keywords:
         for folder_id in folder_ids:
             data = _graph_get(
@@ -227,22 +243,24 @@ def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) ->
                 },
             )
             for msg in data.get("value", []):
-                # Datum prüfen
+                msg_id = msg.get("id", "")
+                if msg_id in seen_ids:
+                    continue
+                seen_ids.add(msg_id)
+
                 recv = msg.get("receivedDateTime", "")
                 try:
                     recv_date = datetime.fromisoformat(recv.replace("Z", "+00:00")).replace(tzinfo=None)
                     if date_from <= recv_date <= date_to:
-                        msg["_score"] = _score_candidate(msg, keyword, amount)
+                        # Score mit dem besten Keyword berechnen
+                        score = _score_candidate(msg, keyword, amount)
+                        existing_score = msg.get("_score", -999)
+                        if score > existing_score:
+                            msg["_score"] = score
                         msg["_has_attachments"] = msg.get("hasAttachments", False)
                         candidates.append(msg)
                 except (ValueError, TypeError):
                     pass
-
-            if candidates:
-                break
-
-        if candidates:
-            break
 
         time.sleep(0.3)
 
@@ -254,7 +272,7 @@ def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) ->
         score = c.get("_score", 0)
         if score < 2:
             continue
-        # Score 2 allein (nur Receipt-Term, kein Vendor-Match) → zu schwach
+        # Score 2 allein (nur Receipt-Term, kein Vendor-Match) -> zu schwach
         # Ausnahme: Billing-Absender haben mindestens Score 4 (Receipt-Term + Billing-Sender)
         if score == 2:
             sender = (c.get("from", {}).get("emailAddress", {}).get("address") or "").lower()
@@ -304,17 +322,93 @@ def _extract_receipt_url(token: str, message_id: str) -> str | None:
     return None
 
 
+def _save_email_body_as_pdf(token: str, message_id: str, download_dir: Path, prefix: str) -> Path | None:
+    """Speichert den HTML-Body einer Email als PDF (fuer Receipts ohne Anhang).
+
+    Speichert als HTML-Datei. Fuer PDF-Konvertierung kann spaeter
+    Playwright oder ein externer Konverter genutzt werden.
+    """
+    data = _graph_get(
+        f"{GRAPH_BASE}/me/messages/{message_id}",
+        token,
+        {"$select": "body,subject"},
+    )
+    body = data.get("body", {})
+    content = body.get("content", "")
+    content_type = body.get("contentType", "text")
+
+    if not content or len(content) < 100:
+        return None
+
+    try:
+        if content_type == "html":
+            fname = f"{prefix}email_receipt.html"
+        else:
+            # Plain text -> wrap in minimal HTML
+            content = f"<html><body><pre style='font-family:sans-serif'>{content}</pre></body></html>"
+            fname = f"{prefix}email_receipt.html"
+
+        save_path = download_dir / fname
+        save_path.write_text(content, encoding="utf-8")
+        if save_path.stat().st_size > 100:
+            return save_path
+    except Exception:
+        pass
+
+    return None
+
+
+def _is_invoice_pdf(pdf_bytes: bytes) -> bool:
+    """Prüft ob ein PDF eine Rechnung/Beleg ist (nicht Kündigungsbestätigung, AGB, etc.)."""
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        text = ""
+        for page_idx in range(min(2, len(doc))):
+            text += doc[page_idx].get_text().lower()
+        doc.close()
+
+        # Positive Signale: enthält Rechnungs-typische Begriffe
+        invoice_signals = [
+            "rechnung", "invoice", "receipt", "beleg", "quittung",
+            "betrag", "amount", "total", "subtotal", "netto", "brutto",
+            "mwst", "ust", "vat", "tax", "eur", "usd",
+        ]
+        has_invoice_signal = any(s in text for s in invoice_signals)
+
+        # Negative Signale: Kündigungsbestätigungen, Willkommens-Briefe, etc.
+        rejection_signals = [
+            "kuendigungsbestaetigung", "kündigungsbestätigung",
+            "kuendigung zum", "kündigung zum",
+            "ihr abonnement endet", "your subscription ends",
+            "willkommen", "welcome aboard",
+        ]
+        has_rejection = any(s in text for s in rejection_signals)
+
+        if has_rejection and not has_invoice_signal:
+            return False
+        return has_invoice_signal
+    except Exception:
+        return True  # Im Zweifel akzeptieren
+
+
 def download_attachments(token: str, message_id: str, download_dir: Path, prefix: str = "") -> list[Path]:
-    """Lädt PDF-Anhänge einer Email herunter (bevorzugt Invoice/Receipt-Dateien)."""
+    """Lädt PDF-Anhänge einer Email herunter (bevorzugt Invoice/Receipt-Dateien).
+
+    Validiert PDF-Inhalt: Kündigungsbestätigungen etc. werden abgelehnt.
+    Dedupliziert identische PDFs per Hash.
+    """
     data = _graph_get(
         f"{GRAPH_BASE}/me/messages/{message_id}/attachments",
         token,
     )
 
-    # PDFs sammeln — Invoices bevorzugen, Receipts nur wenn keine Invoice vorhanden
     import base64
+    import hashlib
     invoices = []
     receipts = []
+    seen_hashes = set()
+
     for att in data.get("value", []):
         name = att.get("name", "")
         content_type = att.get("contentType", "")
@@ -325,7 +419,6 @@ def download_attachments(token: str, message_id: str, download_dir: Path, prefix
         if size > 10 * 1024 * 1024:
             continue
 
-        # AGB, Widerrufsrecht, etc. ausfiltern — nur Rechnungs-relevante PDFs
         name_lower = name.lower()
         skip_names = ["agb", "widerrufsrecht", "datenschutz", "terms", "privacy", "conditions"]
         if any(skip in name_lower for skip in skip_names):
@@ -336,13 +429,25 @@ def download_attachments(token: str, message_id: str, download_dir: Path, prefix
             continue
 
         pdf_bytes = base64.b64decode(content_bytes)
+
+        # Deduplizierung: identische PDFs nur einmal speichern
+        pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+        if pdf_hash in seen_hashes:
+            continue
+        seen_hashes.add(pdf_hash)
+
+        # Inhaltsprüfung: ist das PDF eine Rechnung?
+        if not _is_invoice_pdf(pdf_bytes):
+            print(f"         -> {name}: keine Rechnung (uebersprungen)")
+            continue
+
         safe_name = re.sub(r"[^\w.\-]", "_", name)
         save_path = download_dir / f"{prefix}{safe_name}"
         save_path.write_bytes(pdf_bytes)
 
-        if "invoice" in name.lower():
+        if "invoice" in name_lower:
             invoices.append(save_path)
-        elif "receipt" in name.lower():
+        elif "receipt" in name_lower:
             receipts.append(save_path)
         else:
             invoices.append(save_path)
@@ -447,7 +552,7 @@ def match_and_download_receipts(
             files = download_attachments(token, msg["id"], download_dir, prefix)
             if files:
                 for f in files:
-                    print(f"         📎 {f.name}")
+                    print(f"         -> {f.name}")
                 all_files.extend(files)
                 matched.append({
                     "entry": entry,
@@ -456,12 +561,29 @@ def match_and_download_receipts(
                     "files": files,
                 })
             else:
-                print(f"         ⚠️  Email gefunden aber kein PDF-Anhang")
+                print(f"         Email gefunden aber kein PDF-Anhang")
                 unmatched.append(entry)
         else:
-            # Kein PDF-Anhang → als unmatched weiterreichen (Portal-Scraper versucht es)
-            print(f"         ℹ️  Email ohne PDF → weiter an Portal-Scraper")
-            unmatched.append(entry)
+            # Kein PDF-Anhang — versuche Email-Body als PDF zu speichern
+            # (funktioniert gut fuer Google Play Belege, Stripe Receipts, etc.)
+            score = msg.get("_score", 0)
+            if score >= 4:
+                body_pdf = _save_email_body_as_pdf(token, msg["id"], download_dir, prefix)
+                if body_pdf:
+                    print(f"         -> {body_pdf.name} (aus Email-Body)")
+                    all_files.append(body_pdf)
+                    matched.append({
+                        "entry": entry,
+                        "email_subject": msg.get("subject", ""),
+                        "email_id": msg["id"],
+                        "files": [body_pdf],
+                    })
+                else:
+                    print(f"         Email ohne PDF -> weiter an Portal-Scraper")
+                    unmatched.append(entry)
+            else:
+                print(f"         Email ohne PDF -> weiter an Portal-Scraper")
+                unmatched.append(entry)
 
         time.sleep(0.3)  # Rate-Limiting
 

@@ -1,0 +1,21 @@
+{
+    "id": "chatgpt",
+    "name": "ChatGPT Subscription",
+    "homepage": "https://chatgpt.com",
+    "billing_url": "https://chatgpt.com/admin/billing?tab=invoices",
+    "auth_check_url": "https://chatgpt.com/admin/billing",
+    "auth_check_selector": "main",
+    "match_keywords": ["CHATGPT"],
+    "exclude_keywords": [],
+    "invoices": {
+        "selector": "li:has(a[href*='stripe.com'])",
+        "fields": {
+            "date": {"selector": "span:first-child"},
+            "amount": {"selector": "span.tabular-nums"},
+            "pdf_url": {"selector": "a[href*='stripe.com']", "attribute": "href"}
+        }
+    },
+    "download": {
+        "method": "stripe_url"
+    }
+}

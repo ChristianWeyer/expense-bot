@@ -74,7 +74,7 @@ class TestVendorMatching:
     def test_all_configs_match_expected_vendors(self):
         """Prüft dass jede Config mindestens einen typischen MC-Vendor-Namen matcht."""
         expected = {
-            "openai-api": ["OPENAI", "OPENAI *CHATGPT SUBSCR"],
+            "openai-api": ["OPENAI", "OPENAI, SAN FRANCISCO"],
             "adobe": ["ADOBE *ADOBE", "ADOBE"],
             "cloudflare": ["CLOUDFLARE"],
         }

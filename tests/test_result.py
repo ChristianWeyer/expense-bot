@@ -145,4 +145,4 @@ class TestEmailBody:
             er.status = "unmatched"
 
         subject = _build_subject(r)
-        assert "⚠️" in subject
+        assert "WARNUNG" in subject

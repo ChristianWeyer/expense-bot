@@ -6,10 +6,13 @@
     "auth_check_url": "https://platform.openai.com/settings",
     "auth_check_selector": "nav",
     "match_keywords": ["OPENAI"],
+    "exclude_keywords": ["CHATGPT"],
     "invoices": {
-        "selector": "a[href*='stripe.com/invoice'], a[href*='stripe.com/receipt'], a[href*='invoice.stripe.com']",
+        "selector": "tr:has(a[href*='stripe.com'])",
         "fields": {
-            "pdf_url": {"selector": "self", "attribute": "href"}
+            "amount": {"selector": "td:nth-child(3)"},
+            "date": {"selector": "td:nth-child(4)"},
+            "pdf_url": {"selector": "a[href*='stripe.com']", "attribute": "href"}
         }
     },
     "download": {

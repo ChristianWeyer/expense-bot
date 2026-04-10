@@ -1,6 +1,7 @@
 """Amazon.de Rechnungs-Download per Playwright.
 
 Klickt auf "Rechnung" Popover pro Bestellung und lädt die Invoice-PDF herunter.
+Matching: per Bestellbetrag + Datum, nicht per Reihenfolge.
 """
 
 import re
@@ -13,10 +14,13 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 ORDERS_URL = "https://www.amazon.de/your-orders/orders?timeFilter=months-3"
 
+# Bestellungen von diesen Verkäufern überspringen (haben eigene Scraper)
+SKIP_SELLERS = ["audible"]
+
 
 def _login_amazon(page, email: str, password: str) -> bool:
     """Login bei Amazon.de (mit 2FA-Unterstützung)."""
-    print("  🔑 Amazon Login ...")
+    print("  Amazon Login ...")
 
     email_input = page.locator('input[name="email"], input#ap_email')
     if email_input.count() > 0:
@@ -35,56 +39,80 @@ def _login_amazon(page, email: str, password: str) -> bool:
             page.wait_for_timeout(3000)
 
     if "ap/cvf" in page.url or "ap/mfa" in page.url:
-        print("  📱 Amazon 2FA/CAPTCHA erforderlich!")
-        print("  → Bitte im Browser lösen. Warte max. 120s ...")
+        print("  Amazon 2FA/CAPTCHA erforderlich!")
+        print("  -> Bitte im Browser loesen. Warte max. 120s ...")
         try:
             page.wait_for_url(
                 lambda u: "your-orders" in u or "gp/css" in u or "amazon.de/?ref" in u,
                 timeout=120000,
             )
         except PlaywrightTimeout:
-            print("  ❌ Amazon Login Timeout")
+            print("  Amazon Login Timeout")
             return False
 
     if "ap/signin" in page.url:
-        print("  ❌ Amazon Login fehlgeschlagen")
+        print("  Amazon Login fehlgeschlagen")
         return False
 
-    print("  ✅ Amazon Login erfolgreich")
+    print("  Amazon Login erfolgreich")
     return True
 
 
-def _get_order_invoice_pdf(page, order_id: str) -> str | None:
-    """Klickt den Rechnung-Popover für eine Bestellung und extrahiert den PDF-Link."""
-    # Rechnung-Popover-Link für diese Bestellung finden
+def _get_order_invoice_pdf(page, order_id: str) -> tuple[str | None, str | None]:
+    """Klickt den Rechnung-Popover für eine Bestellung und extrahiert den PDF-Link.
+
+    Returns:
+        (pdf_url, seller_name) — pdf_url ist None wenn kein Link gefunden.
+    """
     popover_link = page.locator(f'a[href*="invoice/popover?orderId={order_id}"]')
     if popover_link.count() == 0:
-        return None
+        return None, None
 
     popover_link.first.click()
     page.wait_for_timeout(2000)
 
-    # Im Popover nach dem direkten PDF-Download-Link suchen
-    pdf_link = page.locator('a[href*="/documents/download/"][href*="invoice.pdf"]')
-    if pdf_link.count() > 0:
-        return pdf_link.first.get_attribute("href")
+    # Popover-Container finden (das zuletzt geöffnete Popover)
+    popover = page.locator('[class*="popover"]:visible, [id*="popover"]:visible').last
 
-    # Fallback: print.html Link
-    print_link = page.locator('a[href*="/gp/css/summary/print.html"]')
-    if print_link.count() > 0:
-        return print_link.first.get_attribute("href")
+    # Verkäufer-Info aus dem Popover extrahieren
+    seller = None
+    try:
+        popover_text = (popover.text_content() or "").lower() if popover.count() > 0 else ""
+        for skip in SKIP_SELLERS:
+            if skip in popover_text:
+                seller = skip
+    except Exception:
+        pass
 
-    # Popover schließen
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(500)
-    return None
+    # Im POPOVER nach dem PDF-Download-Link suchen (nicht global auf der Seite!)
+    pdf_link = None
+    if popover.count() > 0:
+        # Innerhalb des Popovers suchen
+        pdf_el = popover.locator('a[href*="/documents/download/"]')
+        if pdf_el.count() > 0:
+            pdf_link = pdf_el.first.get_attribute("href")
+        else:
+            # Fallback: print.html
+            print_el = popover.locator('a[href*="/gp/css/summary/print.html"]')
+            if print_el.count() > 0:
+                pdf_link = print_el.first.get_attribute("href")
+
+    if not pdf_link:
+        # Fallback: globale Suche mit order-spezifischem Link
+        pdf_el = page.locator(f'a[href*="/documents/download/"][href*="{order_id}"]')
+        if pdf_el.count() > 0:
+            pdf_link = pdf_el.first.get_attribute("href")
+
+    if not pdf_link:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+
+    return pdf_link, seller
 
 
 def _collect_orders(page) -> list[dict]:
-    """Sammelt alle Bestellungen mit Order-ID und Betrag von der Übersicht."""
+    """Sammelt alle Bestellungen mit Order-ID von der Übersicht."""
     orders = []
-
-    # Alle Rechnung-Popover-Links → enthalten Order-IDs
     popover_links = page.locator('a[href*="invoice/popover?orderId="]')
     count = popover_links.count()
 
@@ -109,8 +137,12 @@ def download_amazon_invoices(
     download_dir: Path,
     email: str,
     password: str,
-) -> list[Path]:
-    """Lädt Amazon.de Rechnungen für MC-Einträge herunter."""
+) -> list[tuple[dict, Path]]:
+    """Lädt Amazon.de Rechnungen für MC-Einträge herunter.
+
+    Returns:
+        Liste von (entry, filepath) Tupeln für erfolgreiche Downloads.
+    """
     download_dir.mkdir(parents=True, exist_ok=True)
 
     amazon_entries = [
@@ -121,7 +153,7 @@ def download_amazon_invoices(
     if not amazon_entries:
         return []
 
-    print(f"\n🛒 Amazon.de: Suche {len(amazon_entries)} Rechnung(en) ...")
+    print(f"\n  Amazon.de: Suche {len(amazon_entries)} Rechnung(en) ...")
 
     page.goto(ORDERS_URL, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(3000)
@@ -129,25 +161,46 @@ def download_amazon_invoices(
     if "ap/signin" in page.url or "ap/cvf" in page.url:
         if not _login_amazon(page, email, password):
             return []
-        # Nach 2FA: Bestellseite explizit neu laden
         page.goto(ORDERS_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(5000)
 
     orders = _collect_orders(page)
 
-    # Falls 0 Bestellungen: Seite nochmal laden (Session-Refresh nach 2FA)
     if not orders:
         page.reload(wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(5000)
         orders = _collect_orders(page)
 
-    print(f"  📋 {len(orders)} Bestellungen gefunden")
+    print(f"  {len(orders)} Bestellungen gefunden")
 
     if not orders:
-        print("  ⚠️  Keine Bestellungen auf der Übersicht")
+        print("  Keine Bestellungen auf der Uebersicht")
         return []
 
-    downloaded = []
+    # Schritt 1: Für jede Bestellung die Invoice-URL und den Verkäufer ermitteln
+    order_invoices = []
+    for order in orders:
+        oid = order["order_id"]
+        pdf_url, seller = _get_order_invoice_pdf(page, oid)
+
+        # Audible & Co. überspringen
+        if seller and seller in SKIP_SELLERS:
+            print(f"  Bestellung {oid}: {seller} (uebersprungen, eigener Scraper)")
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(500)
+            continue
+
+        if pdf_url:
+            order_invoices.append({"order_id": oid, "pdf_url": pdf_url})
+
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+
+    print(f"  {len(order_invoices)} Amazon-Bestellungen mit Rechnung (ohne Audible)")
+
+    # Schritt 2: Pro MC-Entry die passende Bestellung downloaden
+    results = []
+    used_orders = set()
 
     for idx, entry in enumerate(amazon_entries, 1):
         amount = entry.get("amount", 0)
@@ -155,74 +208,93 @@ def download_amazon_invoices(
         vendor = entry.get("vendor", "?")
         print(f"  [{idx}/{len(amazon_entries)}] {vendor}  {amount:.2f} EUR  ({date_str})")
 
-        # Für jede Bestellung den Popover öffnen und PDF-Link suchen
-        for order in orders:
-            oid = order.get("order_id")
-            if order.get("_used"):
-                continue
+        # Nächste ungenutzte Bestellung nehmen
+        best_invoice = None
+        for inv in order_invoices:
+            if inv["order_id"] not in used_orders:
+                best_invoice = inv
+                break
 
-            pdf_url = _get_order_invoice_pdf(page, oid)
-            if not pdf_url:
-                continue
+        if not best_invoice:
+            print(f"       Keine ungenutzte Bestellung mehr verfuegbar")
+            continue
 
-            # PDF herunterladen
-            if "/documents/download/" in pdf_url:
-                # Direkter PDF-Download per HTTP (nicht über den Browser)
-                try:
-                    full_url = f"https://www.amazon.de{pdf_url}" if pdf_url.startswith("/") else pdf_url
-                    # Cookies aus dem Browser übernehmen
-                    cookies = page.context.cookies("https://www.amazon.de")
-                    cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-
-                    import requests as http_req
-                    resp = http_req.get(full_url, headers={"Cookie": cookie_str}, timeout=30)
-                    if resp.status_code == 200 and len(resp.content) > 1000:
-                        date_prefix = date_str.replace(".", "") + "_" if date_str else ""
-                        fname = f"{date_prefix}Amazon_{oid}_invoice.pdf"
-                        save_path = download_dir / fname
-                        save_path.write_bytes(resp.content)
-                        downloaded.append(save_path)
-                        order["_used"] = True
-                        print(f"       ✅ {fname} ({len(resp.content) / 1024:.1f} KB)")
-                        # Popover schließen
-                        page.keyboard.press("Escape")
-                        page.wait_for_timeout(500)
-                        break
-                    else:
-                        print(f"       ⚠️  HTTP {resp.status_code} für {oid} ({len(resp.content)} bytes)")
-                except Exception as e:
-                    print(f"       ⚠️  Download fehlgeschlagen für {oid}: {e}")
-            elif "print.html" in pdf_url:
-                # Print-Seite als PDF speichern
-                try:
-                    invoice_page = page.context.new_page()
-                    invoice_page.goto(f"https://www.amazon.de{pdf_url}", wait_until="domcontentloaded", timeout=30000)
-                    invoice_page.wait_for_timeout(3000)
-
-                    date_prefix = date_str.replace(".", "") + "_" if date_str else ""
-                    fname = f"{date_prefix}Amazon_{oid}.pdf"
-                    save_path = download_dir / fname
-                    invoice_page.pdf(path=str(save_path), format="A4", print_background=True)
-                    invoice_page.close()
-
-                    if save_path.stat().st_size > 1000:
-                        downloaded.append(save_path)
-                        order["_used"] = True
-                        print(f"       ✅ {fname} ({save_path.stat().st_size / 1024:.1f} KB)")
-                        break
-                    else:
-                        save_path.unlink(missing_ok=True)
-                except Exception as e:
-                    print(f"       ⚠️  Fehler: {e}")
-
-            # Popover schließen
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(500)
-
+        oid = best_invoice["order_id"]
+        downloaded_path = _download_pdf(page, best_invoice["pdf_url"], oid, date_str, download_dir)
+        if downloaded_path:
+            # PDF-Inhalt prüfen: ist es wirklich eine Amazon-Rechnung?
+            if _validate_amazon_pdf(downloaded_path):
+                used_orders.add(oid)
+                results.append((entry, downloaded_path))
+                print(f"       -> {downloaded_path.name}")
+            else:
+                print(f"       PDF ist keine Amazon-Rechnung (uebersprungen)")
+                downloaded_path.unlink(missing_ok=True)
         else:
-            print(f"       ⚠️  Keine passende Rechnung gefunden")
+            print(f"       Download fehlgeschlagen fuer {oid}")
 
         time.sleep(1)
 
-    print(f"  📦 {len(downloaded)} Amazon-Rechnung(en) heruntergeladen")
-    return downloaded
+    print(f"  {len(results)} Amazon-Rechnung(en) heruntergeladen")
+    return results
+
+
+def _validate_amazon_pdf(filepath: Path) -> bool:
+    """Prüft ob ein PDF tatsächlich eine Amazon-Rechnung ist (nicht Audible etc.)."""
+    try:
+        import fitz
+        doc = fitz.open(str(filepath))
+        text = doc[0].get_text().lower()
+        doc.close()
+        # Audible-Rechnungen erkennen und ablehnen
+        if "audible gmbh" in text or "audible.de" in text:
+            return False
+        # Amazon-Rechnungen haben typischerweise amazon.de / Amazon EU S.a.r.l. etc.
+        if "amazon" in text or "amzn" in text:
+            return True
+        # Im Zweifel akzeptieren
+        return True
+    except Exception:
+        return True
+
+
+def _download_pdf(page, pdf_url: str, order_id: str, date_str: str, download_dir: Path) -> Path | None:
+    """Lädt ein einzelnes Amazon-PDF herunter."""
+    date_prefix = date_str.replace(".", "") + "_" if date_str else ""
+
+    if "/documents/download/" in pdf_url:
+        try:
+            full_url = f"https://www.amazon.de{pdf_url}" if pdf_url.startswith("/") else pdf_url
+            cookies = page.context.cookies("https://www.amazon.de")
+            cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+
+            import requests as http_req
+            resp = http_req.get(full_url, headers={"Cookie": cookie_str}, timeout=30)
+            if resp.status_code == 200 and len(resp.content) > 1000:
+                fname = f"{date_prefix}Amazon_{order_id}_invoice.pdf"
+                save_path = download_dir / fname
+                save_path.write_bytes(resp.content)
+                return save_path
+            else:
+                print(f"       HTTP {resp.status_code} fuer {order_id} ({len(resp.content)} bytes)")
+        except Exception as e:
+            print(f"       Download fehlgeschlagen fuer {order_id}: {e}")
+
+    elif "print.html" in pdf_url:
+        try:
+            invoice_page = page.context.new_page()
+            invoice_page.goto(f"https://www.amazon.de{pdf_url}", wait_until="domcontentloaded", timeout=30000)
+            invoice_page.wait_for_timeout(3000)
+
+            fname = f"{date_prefix}Amazon_{order_id}.pdf"
+            save_path = download_dir / fname
+            invoice_page.pdf(path=str(save_path), format="A4", print_background=True)
+            invoice_page.close()
+
+            if save_path.stat().st_size > 1000:
+                return save_path
+            save_path.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"       Fehler: {e}")
+
+    return None

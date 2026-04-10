@@ -33,7 +33,7 @@ JSON-Config Format (vereinfacht von Invoice Radar):
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -64,6 +64,12 @@ def _match_vendor(config: dict, vendor_name: str) -> bool:
     if not keywords:
         keywords = [config.get("id", ""), config.get("name", "")]
     vendor_upper = vendor_name.upper()
+
+    # Exclude-Keywords prüfen (z.B. "CHATGPT" bei OpenAI API)
+    excludes = config.get("exclude_keywords", [])
+    if any(ex.upper() in vendor_upper for ex in excludes if ex):
+        return False
+
     return any(kw.upper() in vendor_upper for kw in keywords if kw)
 
 
@@ -135,6 +141,73 @@ def _extract_invoices(page, config: dict) -> list[dict]:
             results.append(invoice)
 
     return results
+
+
+def _parse_invoice_date(date_text: str) -> datetime | None:
+    """Parst verschiedene Datumsformate aus Invoice-Tabellen."""
+    if not date_text:
+        return None
+    # Gängige Formate: "Mar 9, 2026", "2026-03-09", "09.03.2026", "Mar 9, 2026, 1:31 PM"
+    clean = re.sub(r',\s*\d{1,2}:\d{2}\s*(AM|PM|am|pm)', '', date_text).strip()
+    for fmt in ("%b %d, %Y", "%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(clean, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_entry_date(date_str: str) -> datetime | None:
+    """Parst MC-Entry-Datum (DD.MM.YY)."""
+    try:
+        return datetime.strptime(date_str, "%d.%m.%y")
+    except (ValueError, TypeError):
+        return None
+
+
+def _match_invoice_to_entry(invoices: list[dict], entry: dict) -> dict | None:
+    """Findet die beste Invoice für einen MC-Entry per Datum und/oder Betrag.
+
+    Strategie:
+    1. Datum-Match (Invoice-Datum innerhalb ±7 Tage des Entry-Datums)
+    2. Bei mehreren Datum-Treffern: nächstes Datum gewinnt
+    3. Fallback: nächste ungenutzte Invoice (wenn keine Datum-Info vorhanden)
+    """
+    entry_date = _parse_entry_date(entry.get("date", ""))
+
+    # Sammle Kandidaten mit Datum-Info
+    candidates = []
+    no_date_invoices = []
+
+    for inv in invoices:
+        if inv.get("_used"):
+            continue
+        inv_date = _parse_invoice_date(inv.get("date", ""))
+        if inv_date and entry_date:
+            # Invoice-Datum kann VOR oder NACH dem MC-Datum liegen:
+            # - Vor: Prepaid/Abo-Rechnungen
+            # - Nach: Nutzungsbasierte Rechnungen (OpenAI API etc.)
+            diff_days = abs((inv_date - entry_date).days)
+            if diff_days <= 21:  # Innerhalb 3 Wochen
+                candidates.append((diff_days, inv))
+        elif not inv.get("date", "").strip():
+            no_date_invoices.append(inv)
+
+    if candidates:
+        # Nächstes Datum gewinnt
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1]
+
+    # Fallback: nächste ungenutzte (nur wenn KEINE Invoice Daten hat)
+    if no_date_invoices:
+        return no_date_invoices[0]
+
+    # Letzter Fallback: irgendeine ungenutzte
+    for inv in invoices:
+        if not inv.get("_used"):
+            return inv
+
+    return None
 
 
 def _download_invoice_pdf(page, invoice: dict, config: dict, download_dir: Path, date_str: str) -> Path | None:
@@ -243,17 +316,20 @@ def download_portal_invoices(
     page,
     entries: list[dict],
     download_dir: Path,
-) -> list[Path]:
+) -> list[tuple[dict, Path, str]]:
     """
     Versucht für ungematchte MC-Einträge Rechnungen von Vendor-Portalen
     herunterzuladen. Nutzt JSON-Konfigurationen aus portals/*.json.
+
+    Returns:
+        Liste von (entry, filepath, portal_id) Tupeln.
     """
     configs = load_portal_configs()
     if not configs:
         return []
 
     download_dir.mkdir(parents=True, exist_ok=True)
-    downloaded = []
+    results = []
 
     # Nur Belastungen ohne is_credit
     debits = [e for e in entries if not e.get("is_credit")]
@@ -275,19 +351,19 @@ def download_portal_invoices(
     if not matched_configs:
         return []
 
-    print(f"\n🌐 Portal-Download: {len(matched_configs)} Vendor mit Config ...")
+    print(f"\n  Portal-Download: {len(matched_configs)} Vendor mit Config ...")
 
     for portal_id, data in matched_configs.items():
         config = data["config"]
         portal_entries = data["entries"]
         name = config.get("name", portal_id)
 
-        print(f"\n  📋 {name} ({len(portal_entries)} Einträge)")
+        print(f"\n  {name} ({len(portal_entries)} Eintraege)")
 
         # Auth prüfen
         if not _is_authenticated(page, config):
-            print(f"     ❌ Nicht eingeloggt bei {name}")
-            print(f"     → Bitte in Chrome Canary bei {config.get('homepage', '')} einloggen")
+            print(f"     Nicht eingeloggt bei {name}")
+            print(f"     -> Bitte in Chrome Canary bei {config.get('homepage', '')} einloggen")
             continue
 
         # Billing-Seite laden
@@ -305,57 +381,36 @@ def download_portal_invoices(
                 page.wait_for_selector(selector, timeout=30000)
                 page.wait_for_timeout(2000)
             except Exception:
-                page.wait_for_timeout(10000)  # Fallback: feste Wartezeit
+                page.wait_for_timeout(10000)
         else:
             page.wait_for_timeout(10000)
 
         # Invoices extrahieren
         invoices = _extract_invoices(page, config)
-        print(f"     📋 {len(invoices)} Invoice(s) auf der Seite")
+        print(f"     {len(invoices)} Invoice(s) auf der Seite")
 
-        # Für jeden Eintrag eine passende Invoice finden und downloaden
         for entry in portal_entries:
             amount = entry.get("amount", 0)
             date_str = entry.get("date", "")
             vendor = entry.get("vendor", "?")
-            print(f"     🔍 {vendor}  {amount:.2f} EUR  ({date_str})")
+            print(f"     {vendor}  {amount:.2f} EUR  ({date_str})")
 
-            # Match nach Betrag oder einfach die erste verfügbare
-            matched_invoice = None
-            for inv in invoices:
-                if inv.get("_used"):
-                    continue
-                # Betrag-Match versuchen
-                inv_amount_str = inv.get("amount", "").replace(",", ".").replace("€", "").replace("$", "").strip()
-                try:
-                    inv_amount = float(inv_amount_str)
-                    if abs(inv_amount - amount) <= 1.0:
-                        matched_invoice = inv
-                        break
-                except (ValueError, TypeError):
-                    pass
-
-            if not matched_invoice and invoices:
-                # Fallback: nächste ungenutzte Invoice
-                for inv in invoices:
-                    if not inv.get("_used"):
-                        matched_invoice = inv
-                        break
+            matched_invoice = _match_invoice_to_entry(invoices, entry)
 
             if matched_invoice:
                 path = _download_invoice_pdf(page, matched_invoice, config, download_dir, date_str)
                 if path:
                     matched_invoice["_used"] = True
-                    downloaded.append(path)
-                    print(f"     ✅ {path.name} ({path.stat().st_size / 1024:.1f} KB)")
+                    results.append((entry, path, portal_id))
+                    print(f"     -> {path.name} ({path.stat().st_size / 1024:.1f} KB)")
                 else:
-                    print(f"     ⚠️  Download fehlgeschlagen")
+                    print(f"     Download fehlgeschlagen")
             else:
-                print(f"     ⚠️  Keine passende Invoice gefunden")
+                print(f"     Keine passende Invoice gefunden")
 
         time.sleep(1)
 
-    if downloaded:
-        print(f"\n  📦 {len(downloaded)} Portal-Rechnung(en) heruntergeladen")
+    if results:
+        print(f"\n  {len(results)} Portal-Rechnung(en) heruntergeladen")
 
-    return downloaded
+    return results
