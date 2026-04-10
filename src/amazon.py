@@ -185,42 +185,62 @@ def download_amazon_invoices(
         page.goto(ORDERS_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(5000)
 
-    orders = _collect_orders(page)
-
-    if not orders:
-        page.reload(wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(5000)
-        orders = _collect_orders(page)
-
-    print(f"  {len(orders)} Bestellungen gefunden")
-
-    if not orders:
-        print("  Keine Bestellungen auf der Uebersicht")
-        return []
-
-    # Betrags-Extraktion aus der Bestelluebersicht
-    order_amounts = _extract_all_order_amounts(page)
-
-    # Schritt 1: Fuer jede Bestellung die Invoice-URL ermitteln
+    # Sammle Bestellungen mit Invoice-URLs ueber alle Seiten
     order_invoices = []
-    for order in orders:
-        oid = order["order_id"]
-        pdf_url, seller = _get_order_invoice_pdf(page, oid)
+    unmatched_amounts = {round(e.get("amount", 0), 2) for e in amazon_entries}
+    max_pages = 5
+    total_orders = 0
 
-        if seller and seller in SKIP_SELLERS:
-            print(f"  Bestellung {oid}: {seller} (uebersprungen)")
+    for page_num in range(max_pages):
+        page_orders = _collect_orders(page)
+        if not page_orders and page_num == 0:
+            page.reload(wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(5000)
+            page_orders = _collect_orders(page)
+
+        page_amounts = _extract_all_order_amounts(page)
+        total_orders += len(page_orders)
+
+        # Pro Bestellung auf DIESER Seite: Popover klicken und Invoice-URL holen
+        for order in page_orders:
+            oid = order["order_id"]
+            # Bereits erfasst?
+            if any(inv["order_id"] == oid for inv in order_invoices):
+                continue
+
+            pdf_url, seller = _get_order_invoice_pdf(page, oid)
+
+            if seller and seller in SKIP_SELLERS:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
+                continue
+
+            if pdf_url:
+                amt = page_amounts.get(oid)
+                order_invoices.append({"order_id": oid, "pdf_url": pdf_url, "amount": amt})
+
             page.keyboard.press("Escape")
-            page.wait_for_timeout(500)
-            continue
+            page.wait_for_timeout(300)
 
-        if pdf_url:
-            amt = order_amounts.get(oid)
-            order_invoices.append({"order_id": oid, "pdf_url": pdf_url, "amount": amt})
+        # Pruefen ob alle MC-Betraege gefunden wurden
+        for amt in page_amounts.values():
+            unmatched_amounts.discard(round(amt, 2))
 
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(500)
+        if not unmatched_amounts:
+            break
 
-    print(f"  {len(order_invoices)} Bestellungen mit Rechnung")
+        # Naechste Seite
+        next_btn = page.locator('.a-pagination .a-last a')
+        if next_btn.count() == 0 or page.locator('.a-pagination .a-last.a-disabled').count() > 0:
+            break
+        next_btn.first.click()
+        page.wait_for_timeout(3000)
+
+    print(f"  {total_orders} Bestellungen, {len(order_invoices)} mit Rechnung ({page_num + 1} Seite(n))")
+
+    if not order_invoices:
+        print("  Keine Bestellungen mit Rechnung gefunden")
+        return []
 
     # Schritt 2: Pro MC-Entry die PASSENDE Bestellung per Betrag finden und downloaden
     results = []
