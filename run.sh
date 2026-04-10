@@ -49,8 +49,12 @@ if curl -s --max-time 3 "$CDP_URL/json/version" > /dev/null 2>&1; then
 else
     echo "  Chrome Canary starten ..."
     if [ -d "/Applications/Google Chrome Canary.app" ]; then
+        # Persistentes Profil für den Bot — bewahrt alle Login-Sessions
+        # (nicht das Default-Profil, da Chrome nur eine Instanz pro Profil erlaubt)
+        CHROME_PROFILE="$HOME/Library/Application Support/Google/Chrome Canary ExpenseBot"
         "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary" \
             --remote-debugging-port=9222 \
+            --user-data-dir="$CHROME_PROFILE" \
             --no-first-run > /dev/null 2>&1 &
         sleep 2
         CDP_READY=false
