@@ -58,6 +58,40 @@ def _login_amazon(page, email: str, password: str) -> bool:
     return True
 
 
+def _extract_all_order_amounts(page) -> dict[str, float]:
+    """Extrahiert alle Bestellbetraege von der Uebersichtsseite in einem Rutsch."""
+    try:
+        raw = page.evaluate("""() => {
+            const cards = document.querySelectorAll('.order-card');
+            const results = {};
+            for (const card of cards) {
+                const oidEl = card.querySelector('.yohtmlc-order-id span[dir="ltr"]');
+                if (!oidEl) continue;
+                const oid = oidEl.textContent.trim();
+                const items = card.querySelectorAll('.order-header__header-list-item');
+                for (const item of items) {
+                    const label = item.querySelector('.a-color-secondary.a-text-caps');
+                    if (label && label.textContent.trim() === 'Summe') {
+                        const amtEl = item.querySelector('.a-size-base.a-color-secondary');
+                        if (amtEl) results[oid] = amtEl.textContent.trim();
+                    }
+                }
+            }
+            return results;
+        }""")
+        amounts = {}
+        for oid, amt_str in raw.items():
+            # Parse "43,90 €" or "43,90\xa0€"
+            clean = amt_str.replace("€", "").replace("\xa0", "").replace(" ", "").replace(".", "").replace(",", ".").strip()
+            try:
+                amounts[oid] = float(clean)
+            except ValueError:
+                pass
+        return amounts
+    except Exception:
+        return {}
+
+
 def _get_order_invoice_pdf(page, order_id: str) -> tuple[str | None, str | None]:
     """Klickt den Rechnung-Popover fuer eine Bestellung und extrahiert den PDF-Link.
 
@@ -164,28 +198,31 @@ def download_amazon_invoices(
         print("  Keine Bestellungen auf der Uebersicht")
         return []
 
-    # Schritt 1: Für jede Bestellung die Invoice-URL und den Verkäufer ermitteln
+    # Betrags-Extraktion aus der Bestelluebersicht
+    order_amounts = _extract_all_order_amounts(page)
+
+    # Schritt 1: Fuer jede Bestellung die Invoice-URL ermitteln
     order_invoices = []
     for order in orders:
         oid = order["order_id"]
         pdf_url, seller = _get_order_invoice_pdf(page, oid)
 
-        # Audible & Co. überspringen
         if seller and seller in SKIP_SELLERS:
-            print(f"  Bestellung {oid}: {seller} (uebersprungen, eigener Scraper)")
+            print(f"  Bestellung {oid}: {seller} (uebersprungen)")
             page.keyboard.press("Escape")
             page.wait_for_timeout(500)
             continue
 
         if pdf_url:
-            order_invoices.append({"order_id": oid, "pdf_url": pdf_url})
+            amt = order_amounts.get(oid)
+            order_invoices.append({"order_id": oid, "pdf_url": pdf_url, "amount": amt})
 
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
 
-    print(f"  {len(order_invoices)} Amazon-Bestellungen mit Rechnung (ohne Audible)")
+    print(f"  {len(order_invoices)} Bestellungen mit Rechnung")
 
-    # Schritt 2: Pro MC-Entry die passende Bestellung downloaden
+    # Schritt 2: Pro MC-Entry die PASSENDE Bestellung per Betrag finden und downloaden
     results = []
     used_orders = set()
 
@@ -195,27 +232,39 @@ def download_amazon_invoices(
         vendor = entry.get("vendor", "?")
         print(f"  [{idx}/{len(amazon_entries)}] {vendor}  {amount:.2f} EUR  ({date_str})")
 
-        # Nächste ungenutzte Bestellung nehmen
+        # Match per Betrag (bester Treffer)
         best_invoice = None
+        best_diff = float('inf')
         for inv in order_invoices:
-            if inv["order_id"] not in used_orders:
-                best_invoice = inv
-                break
+            if inv["order_id"] in used_orders:
+                continue
+            if inv["amount"] is not None:
+                diff = abs(inv["amount"] - amount)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_invoice = inv
+
+        # Wenn kein Betrags-Match <= 1 EUR: Fallback auf naechste ungenutzte
+        if best_invoice is None or best_diff > 1.0:
+            for inv in order_invoices:
+                if inv["order_id"] not in used_orders:
+                    best_invoice = inv
+                    break
 
         if not best_invoice:
-            print(f"       Keine ungenutzte Bestellung mehr verfuegbar")
+            print(f"       Keine passende Bestellung gefunden")
             continue
 
         oid = best_invoice["order_id"]
+        match_info = f"(Diff: {best_diff:.2f})" if best_diff < float('inf') else "(kein Betrags-Match)"
         downloaded_path = _download_pdf(page, best_invoice["pdf_url"], oid, date_str, download_dir)
         if downloaded_path:
-            # PDF-Inhalt prüfen: ist es wirklich eine Amazon-Rechnung?
             if _validate_amazon_pdf(downloaded_path):
                 used_orders.add(oid)
                 results.append((entry, downloaded_path))
-                print(f"       -> {downloaded_path.name}")
+                print(f"       -> {downloaded_path.name} {match_info}")
             else:
-                print(f"       PDF ist keine Amazon-Rechnung (uebersprungen)")
+                print(f"       PDF zu klein/kaputt (uebersprungen)")
                 downloaded_path.unlink(missing_ok=True)
         else:
             print(f"       Download fehlgeschlagen fuer {oid}")
