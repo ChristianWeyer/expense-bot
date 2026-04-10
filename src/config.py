@@ -103,3 +103,8 @@ DOWNLOAD_BTN_SELECTOR = (
     'a:has-text("Rechnung als PDF herunterladen"):visible, '
     'button:has-text("Rechnung als PDF herunterladen"):visible'
 )
+
+# ─── Timeouts (ms) ──────────────────────────────────────────
+PAGE_TIMEOUT = 30000       # Seitennavigation
+DOWNLOAD_TIMEOUT = 15000   # PDF-Download
+LOGIN_TIMEOUT = 120000     # Login inkl. 2FA

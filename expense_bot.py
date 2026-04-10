@@ -7,6 +7,7 @@ Quellen, und versendet einen konsolidierten Report per Email.
 """
 
 import argparse
+import os
 import re
 import sys
 from datetime import datetime
@@ -20,6 +21,11 @@ from src.config import (
     AMAZON_EMAIL, AMAZON_PASSWORD,
     CC_EMAIL, CDP_URL, MC_PDF, KEEP_DAYS,
     BROWSER_DATA_DIR,
+    ADOBE_EMAIL, ADOBE_PASSWORD,
+    HEISE_EMAIL, HEISE_PASSWORD,
+    GOOGLE_EMAIL, GOOGLE_PASSWORD,
+    FIGMA_EMAIL, FIGMA_PASSWORD,
+    OPENAI_EMAIL, OPENAI_PASSWORD,
 )
 from src.timer import Timer
 from src.history import cleanup_old_invoices
@@ -27,6 +33,38 @@ from src.auth import get_graph_token
 from src.bahn import login, download_invoices
 from src.mail import send_email
 from src.result import RunResult
+
+
+def _check_credentials(args):
+    """Prüft Credentials beim Start und warnt bei fehlenden optionalen Zugangsdaten."""
+    # Required
+    required = [
+        ("BAHN_EMAIL", BAHN_EMAIL),
+        ("BAHN_PASSWORD", BAHN_PASSWORD),
+        ("RECIPIENT_EMAIL", RECIPIENT_EMAIL),
+        ("AZURE_CLIENT_ID", AZURE_CLIENT_ID),
+    ]
+    missing_required = [name for name, val in required if not val]
+    if missing_required:
+        print(f"FEHLER: Fehlende Pflicht-Credentials: {', '.join(missing_required)}")
+        sys.exit(1)
+
+    if args.mc_pdf and not os.environ.get("OPENAI_API_KEY"):
+        print("FEHLER: OPENAI_API_KEY nicht gesetzt (nötig für MC-PDF-Parsing)")
+        sys.exit(1)
+
+    # Optional — nur Warnung
+    optional = [
+        ("AMAZON_EMAIL/AMAZON_PASSWORD", AMAZON_EMAIL and AMAZON_PASSWORD, "Amazon-Scraper wird übersprungen"),
+        ("GOOGLE_EMAIL/GOOGLE_PASSWORD", GOOGLE_EMAIL and GOOGLE_PASSWORD, "Google-Scraper wird übersprungen"),
+        ("ADOBE_EMAIL/ADOBE_PASSWORD", ADOBE_EMAIL and ADOBE_PASSWORD, "Adobe-Scraper wird übersprungen"),
+        ("HEISE_EMAIL/HEISE_PASSWORD", HEISE_EMAIL and HEISE_PASSWORD, "Heise-Scraper wird übersprungen"),
+        ("FIGMA_EMAIL/FIGMA_PASSWORD", FIGMA_EMAIL and FIGMA_PASSWORD, "Figma-Scraper wird übersprungen"),
+        ("OPENAI_EMAIL/OPENAI_PASSWORD", OPENAI_EMAIL and OPENAI_PASSWORD, "OpenAI-Portal-Scraper wird übersprungen"),
+    ]
+    for name, present, hint in optional:
+        if not present:
+            print(f"  ⚠️  Fehlend: {name} — {hint}")
 
 
 def main():
@@ -45,13 +83,7 @@ def main():
     timer = Timer()
     result = RunResult()
 
-    missing = [name for name, val in [
-        ("BAHN_EMAIL", BAHN_EMAIL), ("BAHN_PASSWORD", BAHN_PASSWORD),
-        ("RECIPIENT_EMAIL", RECIPIENT_EMAIL), ("AZURE_CLIENT_ID", AZURE_CLIENT_ID),
-    ] if not val]
-    if missing:
-        print(f"Fehlende Umgebungsvariablen: {', '.join(missing)}")
-        sys.exit(1)
+    _check_credentials(args)
 
     print("=" * 50)
     print("Expense Bot")
@@ -183,11 +215,22 @@ def main():
             # Nur anwenden wenn Entry noch pending ist (kein Portal-Scraper hat eine PDF geliefert)
             er = result.find_entry(entry.get("_id", ""))
             if not er:
-                # Fallback: per object identity
+                # Fallback 1: per object identity
                 for candidate in result.entries:
                     if candidate.entry is entry:
                         er = candidate
                         break
+            if not er:
+                # Fallback 2: per vendor+amount+date triple (wie mark_matched)
+                candidates = [
+                    c for c in result.entries
+                    if (c.status == "pending"
+                        and c.vendor == entry.get("vendor", "")
+                        and abs(c.amount - entry.get("amount", 0)) < 0.01
+                        and c.date == entry.get("date", ""))
+                ]
+                if len(candidates) == 1:
+                    er = candidates[0]
             if er and er.status == "pending" and files:
                 result.mark_matched(entry, files, source="outlook:html",
                                     email_subject=m.get("email_subject", ""))

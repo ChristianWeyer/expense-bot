@@ -12,7 +12,7 @@ from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-from src.config import GOOGLE_EMAIL, GOOGLE_PASSWORD
+from src.config import GOOGLE_EMAIL, GOOGLE_PASSWORD, PAGE_TIMEOUT, LOGIN_TIMEOUT
 
 
 ACTIVITY_URL = "https://pay.google.com/gp/w/home/activity"
@@ -53,7 +53,7 @@ def _login_google(page, email: str, password: str) -> bool:
         try:
             page.wait_for_url(
                 lambda u: "challenge" not in u and "signin" not in u,
-                timeout=120000,
+                timeout=LOGIN_TIMEOUT,
             )
         except PlaywrightTimeout:
             print("  Google Login Timeout")
@@ -117,7 +117,7 @@ def download_google_invoices(page, entries: list[dict], download_dir: Path) -> l
 
     print(f"\n  Google Payments: Suche {len(google_entries)} Beleg(e) ...")
 
-    page.goto(ACTIVITY_URL, wait_until="domcontentloaded", timeout=30000)
+    page.goto(ACTIVITY_URL, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
     page.wait_for_timeout(10000)
 
     # Auth-Check + Auto-Login
@@ -125,7 +125,7 @@ def download_google_invoices(page, entries: list[dict], download_dir: Path) -> l
         if GOOGLE_EMAIL and GOOGLE_PASSWORD:
             if not _login_google(page, GOOGLE_EMAIL, GOOGLE_PASSWORD):
                 return []
-            page.goto(ACTIVITY_URL, wait_until="domcontentloaded", timeout=30000)
+            page.goto(ACTIVITY_URL, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
             page.wait_for_timeout(10000)
         else:
             print("  Google: Nicht eingeloggt und keine Credentials konfiguriert")

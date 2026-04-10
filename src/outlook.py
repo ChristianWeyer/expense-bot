@@ -27,16 +27,21 @@ BELEGE_FOLDER = os.environ.get("BELEGE_FOLDER", "Belege")
 
 # ─── Graph API Helpers ──────────────────────────────────────────────
 
-def _graph_get(url: str, token: str, params: dict | None = None) -> dict:
-    """GET-Request an die Graph API."""
+def _graph_get(url: str, token: str, params: dict | None = None, _retried: bool = False) -> dict:
+    """GET-Request an die Graph API. Bei 401 wird einmalig ein Token-Refresh versucht."""
     resp = requests.get(
         url,
         headers={"Authorization": f"Bearer {token}"},
         params=params,
         timeout=30,
     )
+    if resp.status_code == 401 and not _retried:
+        print("  ⚠️  Graph API: 401 — versuche Token-Refresh ...")
+        from src.auth import get_graph_token
+        new_token = get_graph_token()
+        return _graph_get(url, new_token, params, _retried=True)
     if resp.status_code == 401:
-        print("  ❌ Graph API: Token abgelaufen. Bitte .token_cache.json löschen und neu anmelden.")
+        print("  ❌ Graph API: Token abgelaufen (auch nach Refresh). Bitte .token_cache.json löschen und neu anmelden.")
         return {}
     if resp.status_code == 403:
         print("  ❌ Graph API: Fehlende Berechtigung (Mail.Read). Bitte .token_cache.json löschen und neu anmelden.")

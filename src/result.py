@@ -1,5 +1,6 @@
 """Zentrale Ergebnis-Datenstruktur für die Entry->PDF Zuordnung."""
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -185,6 +186,21 @@ class RunResult:
         for e in self.entries:
             files.extend(e.files)
         return files
+
+    @property
+    def deduplicated_files(self) -> list[Path]:
+        """Wie all_files, aber dedupliziert per SHA256 (first occurrence wins)."""
+        seen_hashes: set[str] = set()
+        unique: list[Path] = []
+        for f in self.all_files:
+            try:
+                h = hashlib.sha256(f.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            if h not in seen_hashes:
+                seen_hashes.add(h)
+                unique.append(f)
+        return unique
 
     @property
     def total_debits(self) -> int:

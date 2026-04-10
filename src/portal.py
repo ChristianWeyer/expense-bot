@@ -17,7 +17,7 @@ from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-from src.config import OPENAI_EMAIL, OPENAI_PASSWORD
+from src.config import OPENAI_EMAIL, OPENAI_PASSWORD, PAGE_TIMEOUT, DOWNLOAD_TIMEOUT, LOGIN_TIMEOUT
 
 
 PORTALS_DIR = Path(__file__).parent.parent / "portals"
@@ -47,7 +47,7 @@ def _login_portal(page, portal_id: str, config: dict, email: str, password: str)
     print(f"     {name} Login ...")
 
     if login_url:
-        page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+        page.goto(login_url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
         page.wait_for_timeout(3000)
 
     # Email eingeben
@@ -91,7 +91,7 @@ def _login_portal(page, portal_id: str, config: dict, email: str, password: str)
         try:
             page.wait_for_url(
                 lambda u: not any(k in u for k in ("challenge", "mfa", "two-factor", "verify", "2fa", "signin", "login")),
-                timeout=120000,
+                timeout=LOGIN_TIMEOUT,
             )
         except PlaywrightTimeout:
             print(f"     {name} Login Timeout")
@@ -145,7 +145,7 @@ def _is_authenticated(page, config: dict) -> bool:
         return True  # Kein Auth-Check konfiguriert
 
     try:
-        page.goto(check_url, wait_until="domcontentloaded", timeout=30000)
+        page.goto(check_url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
         page.wait_for_timeout(5000)
 
         # URL-basierter Check: sind wir auf der richtigen Seite geblieben?
@@ -307,7 +307,7 @@ def _download_invoice_pdf(page, invoice: dict, config: dict, download_dir: Path,
                     'a:has-text("Download receipt"), button:has-text("Download receipt")'
                 )
             if dl_btn.count() > 0:
-                with invoice_page.expect_download(timeout=15000) as dl_info:
+                with invoice_page.expect_download(timeout=DOWNLOAD_TIMEOUT) as dl_info:
                     dl_btn.first.click()
                 download = dl_info.value
                 fname = download.suggested_filename or f"{vendor_name}_invoice.pdf"
@@ -349,7 +349,7 @@ def _download_invoice_pdf(page, invoice: dict, config: dict, download_dir: Path,
         try:
             btn = page.locator(selector)
             if btn.count() > 0:
-                with page.expect_download(timeout=15000) as dl_info:
+                with page.expect_download(timeout=DOWNLOAD_TIMEOUT) as dl_info:
                     btn.first.click()
                 download = dl_info.value
                 fname = download.suggested_filename or f"{vendor_name}_invoice.pdf"
@@ -443,14 +443,14 @@ def download_portal_invoices(
         if not billing_url:
             continue
 
-        page.goto(billing_url, wait_until="domcontentloaded", timeout=30000)
+        page.goto(billing_url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
 
         # Warten bis Invoice-Links sichtbar sind (SPA-Content)
         invoices_config = config.get("invoices", {})
         selector = invoices_config.get("selector", "")
         if selector:
             try:
-                page.wait_for_selector(selector, timeout=30000)
+                page.wait_for_selector(selector, timeout=PAGE_TIMEOUT)
                 page.wait_for_timeout(2000)
             except Exception:
                 page.wait_for_timeout(10000)

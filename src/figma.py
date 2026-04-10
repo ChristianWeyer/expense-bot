@@ -95,6 +95,7 @@ def download_figma_invoices(page, entries: list[dict], download_dir: Path) -> li
         if resp.status_code in (401, 403):
             if FIGMA_EMAIL and FIGMA_PASSWORD:
                 print(f"  Figma: Session abgelaufen (HTTP {resp.status_code}), versuche Login ...")
+                page.context.clear_cookies()
                 if _login_figma(page, FIGMA_EMAIL, FIGMA_PASSWORD):
                     cookies = page.context.cookies("https://www.figma.com")
                     cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)

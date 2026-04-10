@@ -139,13 +139,18 @@ def _build_subject(result: RunResult) -> str:
 
 def send_email(result: RunResult, timer: Timer, dry_run: bool = False, cc_email: str | None = None):
     """Versendet den Beleg-Report per Microsoft Graph API."""
-    files = result.all_files
+    all_files = result.all_files
+    files = result.deduplicated_files
+    dupes_removed = len(all_files) - len(files)
     if not files and not result.unmatched:
         print("\nKeine Belege zum Versenden.")
         return
 
     cc_info = f" (CC: {cc_email})" if cc_email else ""
-    print(f"\nVersende {len(files)} PDF(s) an {RECIPIENT_EMAIL}{cc_info} ...")
+    if dupes_removed:
+        print(f"\nVersende {len(files)} PDF(s) an {RECIPIENT_EMAIL}{cc_info} ({dupes_removed} Duplikat(e) entfernt) ...")
+    else:
+        print(f"\nVersende {len(files)} PDF(s) an {RECIPIENT_EMAIL}{cc_info} ...")
     print(f"   {result.summary()}")
 
     if dry_run:

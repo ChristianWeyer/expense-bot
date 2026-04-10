@@ -56,11 +56,19 @@ else
             --remote-debugging-port=9222 \
             --user-data-dir="$HOME/ChromeCanaryProfile" \
             --no-first-run > /dev/null 2>&1 &
-        sleep 4
-        if curl -s --max-time 3 "$CDP_URL/json/version" > /dev/null 2>&1; then
-            echo "  ✓ Chrome Canary gestartet"
-        else
-            echo "  ✗ Chrome Canary konnte nicht gestartet werden"
+        sleep 2
+        CDP_READY=false
+        for i in 1 2 3; do
+            if curl -s --max-time 3 "$CDP_URL/json/version" > /dev/null 2>&1; then
+                CDP_READY=true
+                echo "  ✓ Chrome Canary gestartet (Versuch $i)"
+                break
+            fi
+            echo "  … CDP noch nicht bereit (Versuch $i/3)"
+            sleep 2
+        done
+        if [ "$CDP_READY" = false ]; then
+            echo "  ✗ Chrome Canary konnte nicht gestartet werden (3 Versuche)"
             exit 1
         fi
     else
