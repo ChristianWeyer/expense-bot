@@ -18,6 +18,8 @@ from pathlib import Path
 
 import requests
 
+from src.config import OWN_EMAIL_DOMAIN
+
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 DATE_TOLERANCE = int(os.environ.get("BELEGE_DATE_TOLERANCE", "35"))
 BELEGE_FOLDER = os.environ.get("BELEGE_FOLDER", "Belege")
@@ -86,6 +88,7 @@ VENDOR_KEYWORDS = {
     "FIGMA": ["figma"],
     "MICROSOFT": ["microsoft", "msbill"],
     "MSFT": ["microsoft", "msbill"],
+    "WL*GOOGLE": ["google youtube", "google play"],
     "GOOGLE": ["google"],
     "ADOBE": ["adobe"],
     "AMAZON": ["amazon"],
@@ -200,6 +203,10 @@ def _score_candidate(msg: dict, vendor_keyword: str, amount: float) -> int:
     if any(p in sender for p in ["billing", "invoice", "receipt", "service@", "noreply@tax"]):
         score += 2
 
+    # Malus: Own outgoing email, not a vendor receipt
+    if OWN_EMAIL_DOMAIN and OWN_EMAIL_DOMAIN.lower() in sender:
+        score -= 8
+
     # Malus: Bot-generierte Emails (nicht weitergeleitete!)
     if "[automatisch]" in subject or "expense bot" in subject:
         score -= 10
@@ -263,6 +270,7 @@ def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) ->
                         existing_score = msg.get("_score", -999)
                         if score > existing_score:
                             msg["_score"] = score
+                            msg["_best_keyword"] = keyword
                         msg["_has_attachments"] = msg.get("hasAttachments", False)
                         candidates.append(msg)
                 except (ValueError, TypeError):
@@ -278,12 +286,19 @@ def search_receipts_for_entry(token: str, folder_ids: list[str], entry: dict) ->
         score = c.get("_score", 0)
         if score < 2:
             continue
+        subject = (c.get("subject") or "").lower()
+        sender = (c.get("from", {}).get("emailAddress", {}).get("address") or "").lower()
+        best_kw = (c.get("_best_keyword") or "").lower()
+        vendor_in_subject_or_sender = best_kw and (best_kw in subject or best_kw in sender)
         # Score 2 allein (nur Receipt-Term, kein Vendor-Match) -> zu schwach
         # Ausnahme: Billing-Absender haben mindestens Score 4 (Receipt-Term + Billing-Sender)
         if score == 2:
-            sender = (c.get("from", {}).get("emailAddress", {}).get("address") or "").lower()
             if not any(p in sender for p in ["billing", "invoice", "receipt", "service@"]):
                 continue
+        # No vendor keyword in subject or sender -> require higher score
+        # (prevents Graph $search body-only matches from being accepted)
+        if not vendor_in_subject_or_sender and score < 5:
+            continue
         filtered.append(c)
     return filtered
 

@@ -210,9 +210,14 @@ def extract_all_entries(pdf_path: str | Path, marked_only: bool = False, max_ret
 
     if marked_only:
         yellow_instruction = (
-            "IMPORTANT: Still extract ALL entries (for verification), but set marked: true\n"
-            "for entries that are visually highlighted (yellow/colored background).\n"
-            "Set marked: false for all other entries."
+            "IMPORTANT: Still extract ALL entries (for verification), but set marked: true or false for each.\n"
+            "Some entries have a YELLOW/LIGHT YELLOW background highlight on the vendor name text and/or the EUR amount column. "
+            "These entries are visually distinct from the white-background entries.\n"
+            "Look carefully at EVERY row — if the vendor name or EUR amount has any yellow or cream colored background "
+            "that differs from the white page background, set marked: true.\n"
+            "If you are unsure whether a row is highlighted, set marked: true (we prefer catching all highlighted entries "
+            "even if it means a few false positives).\n"
+            "Set marked: false for entries that clearly have a plain white background with no highlighting."
         )
     else:
         yellow_instruction = "Set marked: false for all entries (no filtering requested)."
