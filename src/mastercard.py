@@ -50,6 +50,7 @@ For each entry return a JSON object with:
 - is_credit: true if the amount has a + sign (Gutschrift/Storno), false if - sign (Belastung)
 - category: "db" if vendor contains "DB Vertrieb" or "D B Vertrieb", "fx_fee" for currency conversion fee lines, otherwise "other"
 - booking_ref: the DB booking reference number (only for DB Vertrieb entries, null otherwise)
+- marked: true if the entry is visually highlighted (yellow/colored background), false otherwise
 
 Also extract the page subtotal if present:
 - Look for "Zwischensumme von Seite X" — return the EUR amount as "page_subtotal"
@@ -209,11 +210,12 @@ def extract_all_entries(pdf_path: str | Path, marked_only: bool = False, max_ret
 
     if marked_only:
         yellow_instruction = (
-            "IMPORTANT: Extract ONLY entries that are highlighted/marked in yellow.\n"
-            "Skip all entries that are NOT highlighted."
+            "IMPORTANT: Still extract ALL entries (for verification), but set marked: true\n"
+            "for entries that are visually highlighted (yellow/colored background).\n"
+            "Set marked: false for all other entries."
         )
     else:
-        yellow_instruction = ""
+        yellow_instruction = "Set marked: false for all entries (no filtering requested)."
 
     prompt = PAGE_EXTRACTION_PROMPT.format(yellow_instruction=yellow_instruction)
 
@@ -275,6 +277,15 @@ def extract_all_entries(pdf_path: str | Path, marked_only: bool = False, max_ret
     # Assign unique IDs
     for idx, entry in enumerate(all_entries):
         entry["_id"] = f"p{entry.get('_page', 0)}_{idx}"
+
+    # Filter auf markierte Einträge (nach Verifikation!)
+    if marked_only:
+        marked = [e for e in all_entries if e.get("marked")]
+        if marked:
+            print(f"  → Nur gelb markierte Einträge: {len(marked)} von {len(all_entries)}")
+            return marked
+        else:
+            print(f"  ⚠️  Keine gelb markierten Einträge erkannt — verwende alle {len(all_entries)}")
 
     return all_entries
 
