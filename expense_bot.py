@@ -310,9 +310,10 @@ def _fetch_outlook(non_db_raw: list[dict], result: RunResult, timer: Timer, *, d
         Liste von HTML-Body-Fallbacks (Entry+File), die nur verwendet werden
         wenn kein Portal-Scraper eine echte PDF liefert.
     """
-    from src.outlook import match_and_download_receipts
+    from src.outlook import match_and_download_receipts, _cleanup_pdf_browser
     token = get_graph_token()
     outlook_results = match_and_download_receipts(token, non_db_raw, download_dir)
+    _cleanup_pdf_browser()  # Shared Playwright-Browser schliessen vor Spiegel/CDP
 
     html_fallbacks = []
     for m in outlook_results.get("matched", []):

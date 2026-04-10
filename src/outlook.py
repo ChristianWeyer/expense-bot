@@ -521,16 +521,18 @@ def _save_email_body_as_pdf(token: str, message_id: str, download_dir: Path, pre
     return None
 
 
+_pdf_pw = None
 _pdf_browser = None
 
 
 def _html_to_pdf(html_content: str) -> bytes | None:
     """Konvertiert HTML-Content zu PDF via Playwright (shared Browser-Instanz)."""
-    global _pdf_browser
+    global _pdf_pw, _pdf_browser
     try:
         from playwright.sync_api import sync_playwright
         if _pdf_browser is None:
-            _pdf_browser = sync_playwright().start().chromium.launch(headless=True)
+            _pdf_pw = sync_playwright().start()
+            _pdf_browser = _pdf_pw.chromium.launch(headless=True)
         page = _pdf_browser.new_page()
         page.set_content(html_content, wait_until="networkidle")
         pdf_bytes = page.pdf(format="A4", margin={"top": "1cm", "bottom": "1cm", "left": "1cm", "right": "1cm"})
@@ -538,6 +540,23 @@ def _html_to_pdf(html_content: str) -> bytes | None:
         return pdf_bytes
     except Exception:
         return None
+
+
+def _cleanup_pdf_browser():
+    """Schliesst den shared Playwright-Browser für HTML→PDF Konvertierung."""
+    global _pdf_pw, _pdf_browser
+    if _pdf_browser:
+        try:
+            _pdf_browser.close()
+        except Exception:
+            pass
+        _pdf_browser = None
+    if _pdf_pw:
+        try:
+            _pdf_pw.stop()
+        except Exception:
+            pass
+        _pdf_pw = None
 
 
 def _is_invoice_pdf(pdf_bytes: bytes) -> bool:
