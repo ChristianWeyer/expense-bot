@@ -6,28 +6,7 @@ Konfiguriert über JSON-Dateien im portals/ Ordner.
 
 Nutzt CDP (Chrome Canary) für Portale mit Cloudflare-Schutz.
 Login-Sessions bleiben in Chrome erhalten.
-
-JSON-Config Format (vereinfacht von Invoice Radar):
-{
-    "id": "openai-api",
-    "name": "OpenAI API",
-    "homepage": "https://platform.openai.com",
-    "billing_url": "https://platform.openai.com/settings/organization/billing/history",
-    "auth_check_url": "https://platform.openai.com/settings",
-    "auth_check_selector": "[data-testid='nav-settings']",
-    "invoices": {
-        "selector": "a[href*='invoice'], tr[data-testid*='invoice']",
-        "fields": {
-            "date": {"selector": "td:nth-child(1)"},
-            "amount": {"selector": "td:nth-child(2)"},
-            "pdf_url": {"selector": "a[href*='stripe.com']", "attribute": "href"}
-        }
-    },
-    "download": {
-        "method": "stripe_url" | "direct_link" | "click_button" | "print_page",
-        "selector": "a:has-text('Download')"
-    }
-}
+Auto-Login per 1Password Credentials wenn nicht eingeloggt.
 """
 
 import json
@@ -38,8 +17,92 @@ from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
+from src.config import OPENAI_EMAIL, OPENAI_PASSWORD
+
 
 PORTALS_DIR = Path(__file__).parent.parent / "portals"
+
+# Portal-spezifische Credentials (portal_id -> (email, password))
+_PORTAL_CREDENTIALS: dict[str, tuple[str | None, str | None]] = {}
+
+
+def _get_portal_credentials(portal_id: str) -> tuple[str | None, str | None]:
+    """Liefert (email, password) fuer ein Portal aus 1Password/env."""
+    if portal_id in _PORTAL_CREDENTIALS:
+        return _PORTAL_CREDENTIALS[portal_id]
+
+    # OpenAI und ChatGPT teilen sich die gleichen Credentials
+    if portal_id in ("openai-api", "chatgpt"):
+        return (OPENAI_EMAIL, OPENAI_PASSWORD)
+
+    return (None, None)
+
+
+def _login_portal(page, portal_id: str, config: dict, email: str, password: str) -> bool:
+    """Generischer Portal-Login: Email -> Password -> Submit."""
+    name = config.get("name", portal_id)
+    homepage = config.get("homepage", "")
+    login_url = config.get("login_url", homepage)
+
+    print(f"     {name} Login ...")
+
+    if login_url:
+        page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)
+
+    # Email eingeben
+    email_input = page.locator('input[name="email"], input[name="username"], input[type="email"]')
+    if email_input.count() > 0:
+        email_input.first.fill(email)
+        page.wait_for_timeout(500)
+
+        # Continue/Next Button (manche Portale haben zweistufigen Login)
+        cont_btn = page.locator(
+            'button:has-text("Continue"), button:has-text("Next"), '
+            'button:has-text("Weiter"), button[type="submit"]'
+        )
+        if cont_btn.count() > 0:
+            cont_btn.first.click()
+            page.wait_for_timeout(3000)
+
+    # Passwort eingeben
+    pw_input = page.locator('input[name="password"], input[type="password"]')
+    try:
+        pw_input.first.wait_for(state="visible", timeout=10000)
+        pw_input.first.fill(password)
+        page.wait_for_timeout(500)
+
+        submit = page.locator(
+            'button[type="submit"], button:has-text("Log in"), '
+            'button:has-text("Sign in"), button:has-text("Anmelden"), '
+            'button:has-text("Continue")'
+        )
+        if submit.count() > 0:
+            submit.first.click()
+            page.wait_for_timeout(5000)
+    except PlaywrightTimeout:
+        print(f"     Passwort-Feld nicht sichtbar")
+        return False
+
+    # 2FA-Check
+    if any(k in page.url for k in ("challenge", "mfa", "two-factor", "verify", "2fa")):
+        print(f"     {name} 2FA erforderlich!")
+        print(f"     -> Bitte im Browser loesen. Warte max. 120s ...")
+        try:
+            page.wait_for_url(
+                lambda u: not any(k in u for k in ("challenge", "mfa", "two-factor", "verify", "2fa", "signin", "login")),
+                timeout=120000,
+            )
+        except PlaywrightTimeout:
+            print(f"     {name} Login Timeout")
+            return False
+
+    if "login" in page.url or "signin" in page.url or "auth" in page.url:
+        print(f"     {name} Login fehlgeschlagen")
+        return False
+
+    print(f"     {name} Login erfolgreich")
+    return True
 
 
 def load_portal_configs() -> list[dict]:
@@ -362,9 +425,18 @@ def download_portal_invoices(
 
         # Auth prüfen
         if not _is_authenticated(page, config):
-            print(f"     Nicht eingeloggt bei {name}")
-            print(f"     -> Bitte in Chrome Canary bei {config.get('homepage', '')} einloggen")
-            continue
+            cred_email, cred_pw = _get_portal_credentials(portal_id)
+            if cred_email and cred_pw:
+                if not _login_portal(page, portal_id, config, cred_email, cred_pw):
+                    continue
+                # Nach Login erneut pruefen
+                if not _is_authenticated(page, config):
+                    print(f"     {name}: Login scheinbar erfolgreich, aber Auth-Check schlaegt fehl")
+                    continue
+            else:
+                print(f"     Nicht eingeloggt bei {name}")
+                print(f"     -> Credentials in 1Password konfigurieren oder in Chrome Canary einloggen")
+                continue
 
         # Billing-Seite laden
         billing_url = config.get("billing_url")

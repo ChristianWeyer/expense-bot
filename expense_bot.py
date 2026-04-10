@@ -290,6 +290,14 @@ def _fetch_portals(page, result: RunResult, timer: Timer):
         result.mark_matched(entry, [filepath], source="heise")
     total += len(heise_results)
 
+    # Adobe
+    from src.adobe import download_adobe_invoices
+    pending = [er.entry for er in result.non_db_entries if er.status == "pending"]
+    adobe_results = download_adobe_invoices(page, pending, run_dir)
+    for entry, filepath in adobe_results:
+        result.mark_matched(entry, [filepath], source="adobe")
+    total += len(adobe_results)
+
     # Figma
     from src.figma import download_figma_invoices
     pending = [er.entry for er in result.non_db_entries if er.status == "pending"]

@@ -4,13 +4,11 @@ Navigiert zur Rechnungsseite und lädt die passende PDF herunter.
 Nutzt eigenes Browser-Data-Verzeichnis (separate Spiegel-Session).
 """
 
-import os
 import re
 import time
 from datetime import datetime
 from pathlib import Path
 
-import requests as http_req
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 from src.config import ROOT_DIR, _get_secret
@@ -158,9 +156,6 @@ def download_spiegel_invoices(
             }""")
             print(f"  {len(rows)} Rechnung(en) auf der Seite")
 
-            cookies = page.context.cookies("https://gruppenkonto.spiegel.de")
-            cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-
             results = []
             used_nrs = set()
 
@@ -191,18 +186,33 @@ def download_spiegel_invoices(
                 if not href:
                     continue
 
+                date_prefix = date_str.replace(".", "") + "_" if date_str else ""
+                fname = f"{date_prefix}Spiegel_Rechnung_{best_row['nr']}.pdf"
+                save_path = download_dir / fname
+
                 try:
-                    resp = http_req.get(href, headers={"Cookie": cookie_str}, timeout=15)
-                    if resp.status_code == 200 and resp.content[:4] == b"%PDF":
-                        date_prefix = date_str.replace(".", "") + "_" if date_str else ""
-                        fname = f"{date_prefix}Spiegel_Rechnung_{best_row['nr']}.pdf"
-                        save_path = download_dir / fname
-                        save_path.write_bytes(resp.content)
+                    invoice_id = best_row["nr"]
+                    dl_link = page.locator(f'a[href*="downloadInvoiceId={invoice_id}"]')
+                    if dl_link.count() == 0:
+                        # Fallback: suche mit kuerzerer ID
+                        dl_link = page.locator(f'a[href*="downloadInvoiceId"]').filter(
+                            has_text="herunterladen"
+                        )
+
+                    with page.expect_download(timeout=15000) as dl_info:
+                        dl_link.first.click()
+                    download = dl_info.value
+                    download.save_as(str(save_path))
+
+                    if save_path.stat().st_size > 500 and save_path.read_bytes()[:5] == b"%PDF-":
                         results.append((entry, save_path))
                         used_nrs.add(best_row["nr"])
-                        print(f"  -> {fname} ({len(resp.content) / 1024:.1f} KB)")
+                        print(f"  -> {fname} ({save_path.stat().st_size / 1024:.1f} KB)")
                     else:
-                        print(f"  HTTP {resp.status_code}")
+                        save_path.unlink(missing_ok=True)
+                        print(f"  Kein gueltiges PDF")
+                except PlaywrightTimeout:
+                    print(f"  Download-Timeout")
                 except Exception as e:
                     print(f"  Download fehlgeschlagen: {e}")
 

@@ -6,9 +6,38 @@ from pathlib import Path
 import requests as http_req
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
+from src.config import HEISE_EMAIL, HEISE_PASSWORD
+
 
 HEISE_URL = "https://www.heise.de/sso/registration/add_subscriber_id/plenigo?plsnippet=order"
 PLENIGO_BASE = "https://selfservice.plenigo.com"
+
+
+def _login_heise(page, email: str, password: str) -> bool:
+    """Login bei Heise SSO (email + password)."""
+    print("  Heise Login ...")
+
+    email_input = page.locator('input[name="email"], input[type="email"], input#username')
+    if email_input.count() > 0:
+        email_input.first.fill(email)
+        page.wait_for_timeout(500)
+
+    pw_input = page.locator('input[name="password"], input[type="password"]')
+    if pw_input.count() > 0:
+        pw_input.first.fill(password)
+        page.wait_for_timeout(500)
+
+    submit = page.locator('button[type="submit"], button:has-text("Anmelden"), button:has-text("Login")')
+    if submit.count() > 0:
+        submit.first.click()
+        page.wait_for_timeout(5000)
+
+    if "anmelden" in page.url or "login" in page.url:
+        print("  Heise Login fehlgeschlagen")
+        return False
+
+    print("  Heise Login erfolgreich")
+    return True
 
 
 def download_heise_invoices(
@@ -35,9 +64,22 @@ def download_heise_invoices(
     page.goto(HEISE_URL, wait_until="domcontentloaded", timeout=30000)
     page.wait_for_timeout(5000)
 
+    # Auth-Check + Auto-Login
+    if "sso/login" in page.url or "anmelden" in page.url or "login" in page.url:
+        if HEISE_EMAIL and HEISE_PASSWORD:
+            if not _login_heise(page, HEISE_EMAIL, HEISE_PASSWORD):
+                return []
+            page.goto(HEISE_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(5000)
+        else:
+            print("  Heise: Nicht eingeloggt und keine Credentials konfiguriert")
+            print("  -> HEISE_EMAIL/HEISE_PASSWORD setzen oder op://Private/Heise konfigurieren")
+            return []
+
     iframe = page.locator('iframe[src*="plenigo"]')
     if iframe.count() == 0:
-        print("  Plenigo-iframe nicht gefunden")
+        print("  Heise: Plenigo-iframe nicht gefunden (nicht eingeloggt?)")
+        print("  -> Bitte in Chrome Canary bei heise.de einloggen")
         return []
 
     iframe_src = iframe.first.get_attribute("src") or ""

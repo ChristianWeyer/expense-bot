@@ -64,9 +64,24 @@ try:
 except ValueError:
     KEEP_DAYS = 30
 
-# Vendor-spezifische Config (ausgelagert statt hardcoded)
+# Vendor-spezifische Config
 FIGMA_TEAM_ID = os.environ.get("FIGMA_TEAM_ID", "").strip() or None
 OWN_EMAIL_DOMAIN = os.environ.get("OWN_EMAIL_DOMAIN", "thinktecture.com").strip()
+
+ADOBE_EMAIL = _get_secret("ADOBE_EMAIL", "op://Shared/Adobe/username")
+ADOBE_PASSWORD = _get_secret("ADOBE_PASSWORD", "op://Shared/Adobe/password")
+
+HEISE_EMAIL = _get_secret("HEISE_EMAIL", "op://Shared/heise.de/username")
+HEISE_PASSWORD = _get_secret("HEISE_PASSWORD", "op://Shared/heise.de/password")
+
+GOOGLE_EMAIL = _get_secret("GOOGLE_EMAIL", "op://Private/Google - Christian/username")
+GOOGLE_PASSWORD = _get_secret("GOOGLE_PASSWORD", "op://Private/Google - Christian/password")
+
+FIGMA_EMAIL = _get_secret("FIGMA_EMAIL", "op://Private/Figma/username")
+FIGMA_PASSWORD = _get_secret("FIGMA_PASSWORD", "op://Private/Figma/password")
+
+OPENAI_EMAIL = _get_secret("OPENAI_EMAIL", "op://Private/Open AI.com/username")
+OPENAI_PASSWORD = _get_secret("OPENAI_PASSWORD", "op://Private/Open AI.com/password")
 
 # ─── Pfade ──────────────────────────────────────────────────
 

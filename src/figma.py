@@ -1,7 +1,7 @@
 """Figma Invoice Download — ueber interne API (kein Browser-Scraping noetig).
 
 Die Figma API /api/plans/team/{id}/invoices liefert Stripe PDF-URLs direkt.
-Braucht nur Figma-Session-Cookies aus dem CDP-Browser.
+Braucht Figma-Session-Cookies aus dem CDP-Browser oder Auto-Login.
 """
 
 import time
@@ -9,8 +9,55 @@ from datetime import datetime
 from pathlib import Path
 
 import requests as http_req
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-from src.config import FIGMA_TEAM_ID
+from src.config import FIGMA_TEAM_ID, FIGMA_EMAIL, FIGMA_PASSWORD
+
+
+FIGMA_LOGIN_URL = "https://www.figma.com/login"
+
+
+def _login_figma(page, email: str, password: str) -> bool:
+    """Login bei Figma (email + password)."""
+    print("  Figma Login ...")
+
+    page.goto(FIGMA_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+    page.wait_for_timeout(3000)
+
+    email_input = page.locator('input[name="email"], input[type="email"]')
+    if email_input.count() > 0:
+        email_input.first.fill(email)
+        page.wait_for_timeout(500)
+
+    pw_input = page.locator('input[name="password"], input[type="password"]')
+    if pw_input.count() > 0:
+        pw_input.first.fill(password)
+        page.wait_for_timeout(500)
+
+    submit = page.locator('button[type="submit"], button:has-text("Log in"), button:has-text("Anmelden")')
+    if submit.count() > 0:
+        submit.first.click()
+        page.wait_for_timeout(5000)
+
+    # 2FA-Check
+    if "two_factor" in page.url or "mfa" in page.url:
+        print("  Figma 2FA erforderlich!")
+        print("  -> Bitte im Browser loesen. Warte max. 120s ...")
+        try:
+            page.wait_for_url(
+                lambda u: "two_factor" not in u and "mfa" not in u and "login" not in u,
+                timeout=120000,
+            )
+        except PlaywrightTimeout:
+            print("  Figma Login Timeout")
+            return False
+
+    if "login" in page.url:
+        print("  Figma Login fehlgeschlagen")
+        return False
+
+    print("  Figma Login erfolgreich")
+    return True
 
 
 def download_figma_invoices(page, entries: list[dict], download_dir: Path) -> list[tuple[dict, Path]]:
@@ -28,6 +75,15 @@ def download_figma_invoices(page, entries: list[dict], download_dir: Path) -> li
     print(f"\n  Figma: Suche {len(figma_entries)} Rechnung(en) ...")
 
     cookies = page.context.cookies("https://www.figma.com")
+    if not cookies:
+        if FIGMA_EMAIL and FIGMA_PASSWORD:
+            if not _login_figma(page, FIGMA_EMAIL, FIGMA_PASSWORD):
+                return []
+            cookies = page.context.cookies("https://www.figma.com")
+        else:
+            print("  Figma: Nicht eingeloggt und keine Credentials konfiguriert")
+            print("  -> FIGMA_EMAIL/FIGMA_PASSWORD setzen oder op://Private/Figma konfigurieren")
+            return []
     cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
 
     try:
@@ -36,6 +92,25 @@ def download_figma_invoices(page, entries: list[dict], download_dir: Path) -> li
             headers={"Cookie": cookie_str},
             timeout=60,
         )
+        if resp.status_code in (401, 403):
+            if FIGMA_EMAIL and FIGMA_PASSWORD:
+                print(f"  Figma: Session abgelaufen (HTTP {resp.status_code}), versuche Login ...")
+                if _login_figma(page, FIGMA_EMAIL, FIGMA_PASSWORD):
+                    cookies = page.context.cookies("https://www.figma.com")
+                    cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+                    resp = http_req.get(
+                        f"https://www.figma.com/api/plans/team/{FIGMA_TEAM_ID}/invoices",
+                        headers={"Cookie": cookie_str},
+                        timeout=60,
+                    )
+                    if resp.status_code != 200:
+                        print(f"  Figma API Fehler nach Login: HTTP {resp.status_code}")
+                        return []
+                else:
+                    return []
+            else:
+                print(f"  Figma: Nicht eingeloggt (HTTP {resp.status_code})")
+                return []
         if resp.status_code != 200:
             print(f"  API Fehler: HTTP {resp.status_code}")
             return []

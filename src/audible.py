@@ -1,4 +1,8 @@
-"""Audible.de Monatsbeitrags-Rechnungen per Playwright."""
+"""Audible.de Monatsbeitrags-Rechnungen per Playwright.
+
+Nutzt Amazon-Session (gleicher Browser-Kontext).
+Falls nicht eingeloggt, wird Amazon-Login versucht.
+"""
 
 import re
 import time
@@ -6,6 +10,8 @@ from pathlib import Path
 
 import requests as http_req
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+from src.config import AMAZON_EMAIL, AMAZON_PASSWORD
 
 
 MEMBERSHIP_URL = "https://www.audible.de/account/purchase-history?tf=membership&df=last_365_days&ps=20"
@@ -36,8 +42,15 @@ def download_audible_invoices(
     page.wait_for_timeout(5000)
 
     if "signin" in page.url or "ap/signin" in page.url:
-        print("  Nicht bei Audible eingeloggt")
-        return []
+        if AMAZON_EMAIL and AMAZON_PASSWORD:
+            from src.amazon import _login_amazon
+            if not _login_amazon(page, AMAZON_EMAIL, AMAZON_PASSWORD):
+                return []
+            page.goto(MEMBERSHIP_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(5000)
+        else:
+            print("  Audible: Nicht eingeloggt und keine Amazon-Credentials konfiguriert")
+            return []
 
     detail_links = page.locator('a[href*="order-details"]')
     count = detail_links.count()

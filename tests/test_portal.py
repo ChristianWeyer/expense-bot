@@ -9,10 +9,10 @@ from src.portal import load_portal_configs, _match_vendor, PORTALS_DIR
 class TestLoadConfigs:
     def test_loads_all_json_files(self):
         configs = load_portal_configs()
-        assert len(configs) >= 3  # openai-api, adobe, cloudflare
+        assert len(configs) >= 3  # openai-api, chatgpt, cloudflare
         ids = {c["id"] for c in configs}
         assert "openai-api" in ids
-        assert "adobe" in ids
+        assert "chatgpt" in ids
 
     def test_each_config_has_required_fields(self):
         configs = load_portal_configs()
@@ -75,7 +75,7 @@ class TestVendorMatching:
         """Prüft dass jede Config mindestens einen typischen MC-Vendor-Namen matcht."""
         expected = {
             "openai-api": ["OPENAI", "OPENAI, SAN FRANCISCO"],
-            "adobe": ["ADOBE *ADOBE", "ADOBE"],
+            "chatgpt": ["CHATGPT"],
             "cloudflare": ["CLOUDFLARE"],
         }
         configs = load_portal_configs()
