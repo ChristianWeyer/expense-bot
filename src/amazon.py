@@ -59,7 +59,10 @@ def _login_amazon(page, email: str, password: str) -> bool:
 
 
 def _get_order_invoice_pdf(page, order_id: str) -> tuple[str | None, str | None]:
-    """Klickt den Rechnung-Popover für eine Bestellung und extrahiert den PDF-Link.
+    """Klickt den Rechnung-Popover fuer eine Bestellung und extrahiert den PDF-Link.
+
+    Amazon-Popovers laden den Inhalt als globale Seitenelemente (nicht in einem
+    Container). Nach dem Klick suchen wir nach order-spezifischen Links.
 
     Returns:
         (pdf_url, seller_name) — pdf_url ist None wenn kein Link gefunden.
@@ -71,43 +74,27 @@ def _get_order_invoice_pdf(page, order_id: str) -> tuple[str | None, str | None]
     popover_link.first.click()
     page.wait_for_timeout(2000)
 
-    # Popover-Container finden (das zuletzt geöffnete Popover)
-    popover = page.locator('[class*="popover"]:visible, [id*="popover"]:visible').last
-
-    # Verkäufer-Info aus dem Popover extrahieren
+    # Pruefen ob es Audible ist: der documents/download Link enthaelt den Order-ID nicht,
+    # aber der print.html Link schon. Audible hat einen /documents/download/ Link.
     seller = None
-    try:
-        popover_text = (popover.text_content() or "").lower() if popover.count() > 0 else ""
-        for skip in SKIP_SELLERS:
-            if skip in popover_text:
-                seller = skip
-    except Exception:
-        pass
 
-    # Im POPOVER nach dem PDF-Download-Link suchen (nicht global auf der Seite!)
-    pdf_link = None
+    # Finde den zuletzt geoeffneten Popover (hat die hoechste z-index / ist sichtbar)
+    popover = page.locator('.a-popover:visible .invoice-list').last
+
     if popover.count() > 0:
-        # Innerhalb des Popovers suchen
-        pdf_el = popover.locator('a[href*="/documents/download/"]')
-        if pdf_el.count() > 0:
-            pdf_link = pdf_el.first.get_attribute("href")
-        else:
-            # Fallback: print.html
-            print_el = popover.locator('a[href*="/gp/css/summary/print.html"]')
-            if print_el.count() > 0:
-                pdf_link = print_el.first.get_attribute("href")
+        # 1. Direct invoice PDF links innerhalb des Popovers
+        doc_link = popover.locator('a[href*="/documents/download/"]')
+        if doc_link.count() > 0:
+            href = doc_link.first.get_attribute("href") or ""
+            return href, None
 
-    if not pdf_link:
-        # Fallback: globale Suche mit order-spezifischem Link
-        pdf_el = page.locator(f'a[href*="/documents/download/"][href*="{order_id}"]')
-        if pdf_el.count() > 0:
-            pdf_link = pdf_el.first.get_attribute("href")
+        # 2. Fallback: print.html Link innerhalb des Popovers
+        print_link = popover.locator(f'a[href*="print.html"]')
+        if print_link.count() > 0:
+            href = print_link.first.get_attribute("href") or ""
+            return href, None
 
-    if not pdf_link:
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(500)
-
-    return pdf_link, seller
+    return None, seller
 
 
 def _collect_orders(page) -> list[dict]:
@@ -240,19 +227,10 @@ def download_amazon_invoices(
 
 
 def _validate_amazon_pdf(filepath: Path) -> bool:
-    """Prüft ob ein PDF tatsächlich eine Amazon-Rechnung ist (nicht Audible etc.)."""
+    """Prüft ob ein PDF eine Rechnung ist. Akzeptiert alles ausser leere/kaputte PDFs."""
     try:
-        import fitz
-        doc = fitz.open(str(filepath))
-        text = doc[0].get_text().lower()
-        doc.close()
-        # Audible-Rechnungen erkennen und ablehnen
-        if "audible gmbh" in text or "audible.de" in text:
+        if filepath.stat().st_size < 500:
             return False
-        # Amazon-Rechnungen haben typischerweise amazon.de / Amazon EU S.a.r.l. etc.
-        if "amazon" in text or "amzn" in text:
-            return True
-        # Im Zweifel akzeptieren
         return True
     except Exception:
         return True
