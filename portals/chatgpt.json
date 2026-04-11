@@ -3,8 +3,9 @@
     "name": "ChatGPT Subscription",
     "homepage": "https://chatgpt.com",
     "billing_url": "https://chatgpt.com/admin/billing?tab=invoices",
-    "auth_check_url": "https://chatgpt.com/admin/billing",
+    "auth_check_url": "https://chatgpt.com/admin/billing?tab=invoices",
     "auth_check_selector": "a[href*='stripe.com']",
+    "login_pre_click_selector": "button[data-testid='login-button']",
     "match_keywords": ["CHATGPT"],
     "exclude_keywords": [],
     "invoices": {

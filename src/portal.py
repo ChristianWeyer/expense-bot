@@ -40,75 +40,102 @@ def _get_portal_credentials(portal_id: str) -> tuple[str | None, str | None]:
 
 
 def _login_portal(page, portal_id: str, config: dict, email: str, password: str) -> bool:
-    """Generischer Portal-Login: Email -> Password -> Submit."""
+    """Generischer Portal-Login: Email -> Password -> Submit.
+
+    Navigiert zur billing_url (nicht zur homepage!) — die meisten Portale
+    leiten ungeloggte User von dort direkt auf ihre Login-Seite um.
+    """
     name = config.get("name", portal_id)
     homepage = config.get("homepage", "")
-    login_url = config.get("login_url", homepage)
+    billing_url = config.get("billing_url", "")
+    login_url = config.get("login_url") or billing_url or homepage
 
     print(f"     🔑 {name} Login ...")
 
     if login_url:
-        page.goto(login_url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+        try:
+            page.goto(login_url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+        except Exception:
+            pass
         page.wait_for_timeout(3000)
 
-    # Email eingeben
-    email_input = page.locator('input[name="email"], input[name="username"], input[type="email"]')
-    if email_input.count() > 0:
-        email_input.first.fill(email)
-        page.wait_for_timeout(500)
+    # Optionaler Pre-Click Button (z.B. "Log in" in der Header-Leiste)
+    pre_click = config.get("login_pre_click_selector")
+    if pre_click:
+        try:
+            btn = page.locator(pre_click)
+            if btn.count() > 0:
+                btn.first.click(timeout=3000)
+                page.wait_for_timeout(2000)
+        except Exception:
+            pass
 
-        # Continue/Next Button (manche Portale haben zweistufigen Login)
-        cont_btn = page.locator(
-            'button:has-text("Continue"), button:has-text("Next"), '
-            'button:has-text("Weiter"), button[type="submit"]'
-        )
-        if cont_btn.count() > 0:
-            cont_btn.first.click()
-            page.wait_for_timeout(3000)
+    # Email eingeben: bevorzuge input[type="email"] um OAuth-Buttons nicht zu triggern.
+    # WICHTIG: Submit-Button im SELBEN FORM wie das Email-Feld finden, sonst werden
+    # OAuth-Buttons (Google/Apple/Microsoft) fälschlich geklickt!
+    email_input = page.locator('input[type="email"], input[name="email"], input[name="username"]')
+    if email_input.count() > 0:
+        try:
+            email_input.first.fill(email)
+            page.wait_for_timeout(500)
+
+            # Submit-Button im SELBEN FORM finden
+            form_locator = email_input.first.locator('xpath=ancestor::form[1]')
+            try:
+                if form_locator.count() > 0:
+                    cont_btn = form_locator.locator('button[type="submit"]')
+                    if cont_btn.count() > 0:
+                        cont_btn.first.click()
+                        page.wait_for_timeout(4000)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     # Passwort eingeben
     pw_input = page.locator('input[name="password"], input[type="password"]')
+    auto_login_worked = False
     try:
         pw_input.first.wait_for(state="visible", timeout=8000)
         pw_input.first.fill(password)
         page.wait_for_timeout(500)
 
-        submit = page.locator(
-            'button[type="submit"], button:has-text("Log in"), '
-            'button:has-text("Sign in"), button:has-text("Anmelden"), '
-            'button:has-text("Continue")'
-        )
-        if submit.count() > 0:
-            submit.first.click()
-            page.wait_for_timeout(5000)
+        # Submit-Button im SELBEN FORM wie das Passwort-Feld
+        pw_form = pw_input.first.locator('xpath=ancestor::form[1]')
+        try:
+            if pw_form.count() > 0:
+                submit = pw_form.locator('button[type="submit"]')
+                if submit.count() > 0:
+                    submit.first.click()
+                    page.wait_for_timeout(5000)
+                    auto_login_worked = True
+        except Exception:
+            pass
     except PlaywrightTimeout:
-        # Auto-Login nicht möglich — manuellen Login abwarten
-        print(f"     📱 {name}: Auto-Login nicht möglich")
-        print(f"     → Bitte manuell in Chrome Canary einloggen. Warte max. 120s ...")
-        try:
-            page.wait_for_url(
-                lambda u: not any(k in u.lower() for k in ("login", "signin", "auth", "sign-in")),
-                timeout=LOGIN_TIMEOUT,
-            )
-        except PlaywrightTimeout:
-            print(f"     ❌ {name} Login Timeout")
-            return False
+        pass
 
-    # 2FA-Check
-    if any(k in page.url for k in ("challenge", "mfa", "two-factor", "verify", "2fa")):
-        print(f"     📱 {name} 2FA erforderlich!")
-        print(f"     → Bitte im Browser loesen. Warte max. 120s ...")
-        try:
-            page.wait_for_url(
-                lambda u: not any(k in u for k in ("challenge", "mfa", "two-factor", "verify", "2fa", "signin", "login")),
-                timeout=LOGIN_TIMEOUT,
-            )
-        except PlaywrightTimeout:
-            print(f"     ❌ {name} Login Timeout")
-            return False
+    # Auto-Login fertig? URL prüfen (NICHT _is_authenticated aufrufen — das
+    # navigiert weg und würde einen laufenden 2FA/OTP-Flow zerstören).
+    current_url = page.url
+    is_on_login = any(k in current_url.lower() for k in ("login", "signin", "auth", "sign-in", "sign_in"))
 
-    if "login" in page.url or "signin" in page.url or "auth" in page.url:
-        print(f"     ❌ {name} Login fehlgeschlagen")
+    if is_on_login or not auto_login_worked:
+        print(f"     📱 {name}: Auto-Login nicht abgeschlossen (evtl. 2FA/OTP)")
+        print(f"     → Bitte manuell in Chrome Canary einloggen. Warte max. 180s ...")
+        # Warte bis die URL sich NICHT mehr auf einer Login-Seite befindet
+        import time as _t
+        deadline = _t.time() + 180
+        while _t.time() < deadline:
+            _t.sleep(3)
+            try:
+                current_url = page.url
+            except Exception:
+                continue
+            if not any(k in current_url.lower() for k in ("login", "signin", "auth", "sign-in", "sign_in")):
+                print(f"     ✅ {name} Login erfolgreich (URL: {current_url[:60]})")
+                page.wait_for_timeout(2000)
+                return True
+        print(f"     ❌ {name} Login Timeout")
         return False
 
     print(f"     ✅ {name} Login erfolgreich")

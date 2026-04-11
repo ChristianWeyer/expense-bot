@@ -32,13 +32,13 @@ def _login_heise(page, email: str, password: str) -> bool:
     except Exception:
         pass
 
-    # Email-Feld (manchmal in iframe)
+    # Email-Feld: Heise nutzt name="username", type="text"
     try:
-        page.wait_for_selector('input[name="email"], input[type="email"], input#username', timeout=8000)
+        page.wait_for_selector('input[name="username"], input#login-user, input[name="email"]', timeout=8000)
     except PlaywrightTimeout:
         pass
 
-    email_input = page.locator('input[name="email"], input[type="email"], input#username')
+    email_input = page.locator('input[name="username"], input#login-user, input[name="email"]')
     if email_input.count() > 0:
         try:
             email_input.first.fill(email)
@@ -57,20 +57,22 @@ def _login_heise(page, email: str, password: str) -> bool:
             submit.first.click()
             page.wait_for_timeout(5000)
     except PlaywrightTimeout:
-        print("  📱 Heise: Auto-Login nicht möglich")
+        pass  # Fallback unten
+
+    # Auto-Login hat nicht funktioniert (immer noch auf Login-Seite)?
+    # Heise redirected nach Login auf /sso/registration/add_subscriber_id — das ist OK.
+    # Nur /sso/login/ oder /anmelden zählt als "nicht eingeloggt".
+    if "sso/login" in page.url or "anmelden" in page.url:
+        print("  📱 Heise: Auto-Login nicht erfolgreich (Captcha/2FA/etc.)")
         print("  → Bitte manuell in Chrome Canary einloggen. Warte max. 120s ...")
         try:
             page.wait_for_url(
-                lambda u: "heise.de" in u and "anmelden" not in u and "login" not in u,
+                lambda u: "sso/login" not in u and "anmelden" not in u,
                 timeout=120000,
             )
         except PlaywrightTimeout:
             print("  ❌ Heise Login Timeout")
             return False
-
-    if "anmelden" in page.url or "login" in page.url:
-        print("  ❌ Heise Login fehlgeschlagen")
-        return False
 
     print("  ✅ Heise Login erfolgreich")
     return True
