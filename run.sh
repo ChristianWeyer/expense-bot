@@ -21,6 +21,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# --- WatchPaths Guard: nur laufen wenn ein PDF im --mc-pdf Ordner liegt ---
+# Wenn via LaunchAgent getriggert (WatchPaths), prüfen ob wirklich ein
+# neues PDF da ist. Verhindert Runs durch .DS_Store, Spotlight, etc.
+MC_PDF_DIR=""
+for arg in "$@"; do
+    if [ "$MC_PDF_DIR" = "NEXT" ]; then
+        MC_PDF_DIR="$arg"
+        break
+    fi
+    if [ "$arg" = "--mc-pdf" ]; then
+        MC_PDF_DIR="NEXT"
+    fi
+done
+if [ -n "$MC_PDF_DIR" ] && [ -d "$MC_PDF_DIR" ]; then
+    PDF_COUNT=$(find "$MC_PDF_DIR" -maxdepth 1 -name "*.pdf" -o -name "*.PDF" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$PDF_COUNT" = "0" ]; then
+        echo "Kein PDF in $MC_PDF_DIR — überspringe Run"
+        exit 0
+    fi
+fi
+
 # --- Voraussetzungen ---
 if [ ! -d .venv ]; then
     echo "FEHLER: .venv nicht gefunden. Bitte zuerst: python -m venv .venv && pip install -r requirements.txt"
