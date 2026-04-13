@@ -16,14 +16,16 @@
 #   3. Startet Expense Bot mit allen Live-Scrapern
 #   4. Schreibt Log-Datei nach logs/
 
-set -euo pipefail
+set -uo pipefail
+# NICHT set -e: bei Fehler darf das Script NICHT mit exit 1 beenden,
+# weil macOS LaunchAgent WatchPaths nach exit ≠ 0 nicht mehr triggert.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# --- WatchPaths Guard: nur laufen wenn ein PDF im --mc-pdf Ordner liegt ---
-# Wenn via LaunchAgent getriggert (WatchPaths), prüfen ob wirklich ein
-# neues PDF da ist. Verhindert Runs durch .DS_Store, Spotlight, etc.
+# --- WatchPaths Guard ---
+# Prüft ob ein PDF im --mc-pdf Ordner liegt BEVOR Chrome/1Password gestartet werden.
+# Läuft via venv-Python (gleiche TCC-Permissions wie expense_bot.py).
 MC_PDF_DIR=""
 for arg in "$@"; do
     if [ "$MC_PDF_DIR" = "NEXT" ]; then
@@ -34,10 +36,18 @@ for arg in "$@"; do
         MC_PDF_DIR="NEXT"
     fi
 done
-if [ -n "$MC_PDF_DIR" ] && [ -d "$MC_PDF_DIR" ]; then
-    PDF_COUNT=$(find "$MC_PDF_DIR" -maxdepth 1 -name "*.pdf" -o -name "*.PDF" 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$PDF_COUNT" = "0" ]; then
-        echo "Kein PDF in $MC_PDF_DIR — überspringe Run"
+if [ -n "$MC_PDF_DIR" ]; then
+    HAS_PDF=$(.venv/bin/python3 -c "
+from pathlib import Path
+p = Path('$MC_PDF_DIR')
+if p.is_dir():
+    pdfs = [f for f in p.iterdir() if f.suffix.lower() == '.pdf']
+    print(len(pdfs))
+else:
+    print('1' if p.suffix.lower() == '.pdf' and p.exists() else '0')
+" 2>/dev/null || echo "1")
+    if [ "$HAS_PDF" = "0" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Kein PDF in $MC_PDF_DIR — überspringe Run"
         exit 0
     fi
 fi
@@ -59,8 +69,10 @@ source .venv/bin/activate
 # --- Chrome Canary CDP ---
 CDP_URL="${CDP_URL:-http://localhost:9222}"
 
+echo ""
 echo "╔══════════════════════════════════════╗"
-echo "║         Expense Bot Run              ║"
+echo "║  Expense Bot Run                     ║"
+echo "║  $(date '+%Y-%m-%d %H:%M:%S')                    ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
@@ -121,7 +133,7 @@ if [ -z "$MC_PDF_ARG" ]; then
     if [ -z "$MC_PDF_ARG" ]; then
         echo "FEHLER: Kein MC-PDF gefunden in beispiel-pdfs/"
         echo "  Bitte PDF ablegen oder --mc-pdf angeben"
-        exit 1
+        exit 0  # Nicht exit 1: LaunchAgent WatchPaths stoppt bei exit ≠ 0
     fi
 fi
 
@@ -144,4 +156,5 @@ if ! echo "$*" | grep -q -- '--mc-pdf'; then
     ARGS+=(--mc-pdf "$MC_PDF_ARG")
 fi
 
-python expense_bot.py "${ARGS[@]}"
+python expense_bot.py "${ARGS[@]}" || true
+# Immer exit 0: macOS LaunchAgent WatchPaths stoppt bei exit ≠ 0

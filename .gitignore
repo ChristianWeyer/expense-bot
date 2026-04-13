@@ -31,3 +31,4 @@ google_screenshot.png
 
 # macOS
 .DS_Store
+.last_run_ts
