@@ -3,6 +3,8 @@
 import pytest
 from pathlib import Path
 
+from src.amazon import _filter_amazon_entries
+
 
 class TestAmazonEntryFilter:
     def test_filters_amazon_entries(self):
@@ -12,11 +14,7 @@ class TestAmazonEntryFilter:
             {"vendor": "ANTHROPIC", "amount": 103.36, "is_credit": False},
             {"vendor": "AMZN Mktp DE", "amount": 50.0, "is_credit": True},
         ]
-        amazon = [
-            e for e in entries
-            if not e.get("is_credit")
-            and ("AMZN" in e.get("vendor", "").upper() or "AMAZON" in e.get("vendor", "").upper())
-        ]
+        amazon = _filter_amazon_entries(entries)
         assert len(amazon) == 2
         assert amazon[0]["amount"] == 126.03
         assert amazon[1]["amount"] == 21.29

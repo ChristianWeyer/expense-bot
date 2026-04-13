@@ -1,7 +1,7 @@
 """Tests für src/cloudflare.py — API-basierter Rechnungs-Download."""
 
 import pytest
-from src.cloudflare import _get_cf_token
+from src.cloudflare import _get_cf_token, _filter_cloudflare_entries
 
 
 class TestCloudflareConfig:
@@ -11,7 +11,7 @@ class TestCloudflareConfig:
             {"vendor": "ANTHROPIC", "amount": 100.0, "is_credit": False},
             {"vendor": "CLOUDFLARE, SAN FRANCISCO", "amount": 5.00, "is_credit": True},
         ]
-        cf = [e for e in entries if not e.get("is_credit") and "CLOUDFLARE" in e.get("vendor", "").upper()]
+        cf = _filter_cloudflare_entries(entries)
         assert len(cf) == 1
         assert cf[0]["amount"] == 4.35
 

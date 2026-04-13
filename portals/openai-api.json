@@ -3,13 +3,16 @@
     "name": "OpenAI API",
     "homepage": "https://platform.openai.com",
     "billing_url": "https://platform.openai.com/settings/organization/billing/history",
-    "auth_check_url": "https://platform.openai.com/settings",
-    "auth_check_selector": "nav",
+    "auth_check_url": "https://platform.openai.com/settings/organization/billing/history",
+    "auth_check_selector": "a[href*='stripe.com'], h1:has-text('Billing')",
     "match_keywords": ["OPENAI"],
+    "exclude_keywords": ["CHATGPT"],
     "invoices": {
-        "selector": "a[href*='stripe.com/invoice'], a[href*='stripe.com/receipt'], a[href*='invoice.stripe.com']",
+        "selector": "tr:has(a[href*='stripe.com'])",
         "fields": {
-            "pdf_url": {"selector": "self", "attribute": "href"}
+            "amount": {"selector": "td:nth-child(3)"},
+            "date": {"selector": "td:nth-child(4)"},
+            "pdf_url": {"selector": "a[href*='stripe.com']", "attribute": "href"}
         }
     },
     "download": {

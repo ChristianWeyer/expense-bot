@@ -1,4 +1,4 @@
-"""Cloudflare Rechnungs-Download per API (kein Browser nötig)."""
+"""Cloudflare Rechnungs-Download per API (kein Browser noetig)."""
 
 import os
 import time
@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
+
+from src.util import parse_date
 
 
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
@@ -41,26 +43,35 @@ def _get_account_id(token: str) -> str | None:
     return None
 
 
-def download_cloudflare_invoices(
-    entries: list[dict],
-    download_dir: Path,
-) -> list[Path]:
-    """Lädt Cloudflare-Rechnungen per API herunter."""
-    download_dir.mkdir(parents=True, exist_ok=True)
-
-    cf_entries = [
+def _filter_cloudflare_entries(entries: list[dict]) -> list[dict]:
+    """Filtert Cloudflare-Einträge aus MC-Entries."""
+    return [
         e for e in entries
         if not e.get("is_credit") and "CLOUDFLARE" in e.get("vendor", "").upper()
     ]
+
+
+def download_cloudflare_invoices(
+    entries: list[dict],
+    download_dir: Path,
+) -> list[tuple[dict, Path]]:
+    """Lädt Cloudflare-Rechnungen per API herunter.
+
+    Returns:
+        Liste von (entry, filepath) Tupeln.
+    """
+    download_dir.mkdir(parents=True, exist_ok=True)
+
+    cf_entries = _filter_cloudflare_entries(entries)
     if not cf_entries:
         return []
 
     token = _get_cf_token()
     if not token:
-        print("\n☁️  Cloudflare: CLOUDFLARE_API_TOKEN nicht konfiguriert")
+        print("\n  ⚠️ Cloudflare: CLOUDFLARE_API_TOKEN nicht konfiguriert")
         return []
 
-    print(f"\n☁️  Cloudflare: Suche {len(cf_entries)} Rechnung(en) per API ...")
+    print(f"\n  🔍 Cloudflare: Suche {len(cf_entries)} Rechnung(en) per API ...")
 
     account_id = _get_account_id(token)
     if not account_id:
@@ -81,57 +92,68 @@ def download_cloudflare_invoices(
         return []
 
     invoices = resp.json().get("result", [])
-    print(f"  📋 {len(invoices)} Invoice(s) in der Billing History")
+    print(f"  {len(invoices)} Invoice(s) in der Billing History")
 
-    downloaded = []
+    results = []
 
     for entry in cf_entries:
         amount = entry.get("amount", 0)
         date_str = entry.get("date", "")
-        print(f"  🔍 Cloudflare  {amount:.2f} EUR  ({date_str})")
+        entry_date = parse_date(date_str)
+        print(f"  Cloudflare  {amount:.2f} EUR  ({date_str})")
 
-        # Invoice per Betrag matchen
+        # Invoice per Datum matchen (Betrag ist USD, nicht vergleichbar mit EUR)
+        best_inv = None
+        best_diff = float('inf')
         for inv in invoices:
             if inv.get("_used"):
                 continue
-            inv_amount = inv.get("amount", 0)
-            # Cloudflare rechnet in USD — MC-Eintrag ist in EUR.
-            # Toleranz: ±30% für Wechselkurs-Schwankungen
-            if abs(inv_amount - amount) <= max(0.5, amount * 0.3):
-                invoice_id = inv.get("id")
-                if not invoice_id:
-                    continue
+            inv_date_str = inv.get("occurred_at", "")[:10]  # "2026-03-19"
+            try:
+                inv_date = datetime.strptime(inv_date_str, "%Y-%m-%d")
+            except (ValueError, TypeError):
+                continue
+            if entry_date:
+                diff = abs((inv_date - entry_date).days)
+                if diff <= 14 and diff < best_diff:
+                    best_diff = diff
+                    best_inv = inv
 
-                # PDF herunterladen — braucht Global API Key, nicht Bearer Token
-                cf_email, cf_key = _get_cf_global_key()
-                if cf_email and cf_key:
-                    pdf_headers = {"X-Auth-Email": cf_email, "X-Auth-Key": cf_key}
-                else:
-                    pdf_headers = headers  # Fallback auf Bearer Token
+        if not best_inv:
+            print(f"  ⚠️ Keine passende Invoice gefunden")
+            continue
 
-                pdf_resp = requests.get(
-                    f"{CF_API_BASE}/accounts/{account_id}/billing/receipts/{invoice_id}/pdf",
-                    headers=pdf_headers,
-                    params={"doctype": "invoice"},
-                    timeout=30,
-                )
+        invoice_id = best_inv.get("id")
+        if not invoice_id:
+            continue
 
-                if pdf_resp.status_code == 200 and pdf_resp.content[:4] == b"%PDF":
-                    date_prefix = date_str.replace(".", "") + "_" if date_str else ""
-                    fname = f"{date_prefix}Cloudflare_{invoice_id}.pdf"
-                    save_path = download_dir / fname
-                    save_path.write_bytes(pdf_resp.content)
-                    downloaded.append(save_path)
-                    inv["_used"] = True
-                    print(f"  ✅ {fname} ({len(pdf_resp.content) / 1024:.1f} KB)")
-                    break
-                else:
-                    print(f"  ⚠️  PDF-Download fehlgeschlagen: HTTP {pdf_resp.status_code}")
+        # PDF herunterladen
+        cf_email, cf_key = _get_cf_global_key()
+        if cf_email and cf_key:
+            pdf_headers = {"X-Auth-Email": cf_email, "X-Auth-Key": cf_key}
         else:
-            print(f"  ⚠️  Keine passende Invoice gefunden")
+            pdf_headers = headers
+
+        pdf_resp = requests.get(
+            f"{CF_API_BASE}/accounts/{account_id}/billing/receipts/{invoice_id}/pdf",
+            headers=pdf_headers,
+            params={"doctype": "invoice"},
+            timeout=30,
+        )
+
+        if pdf_resp.status_code == 200 and pdf_resp.content[:4] == b"%PDF":
+            date_prefix = date_str.replace(".", "") + "_" if date_str else ""
+            fname = f"{date_prefix}Cloudflare_{invoice_id}.pdf"
+            save_path = download_dir / fname
+            save_path.write_bytes(pdf_resp.content)
+            results.append((entry, save_path))
+            best_inv["_used"] = True
+            print(f"  📎 {fname} ({len(pdf_resp.content) / 1024:.1f} KB)")
+        else:
+            print(f"  ❌ PDF-Download fehlgeschlagen: HTTP {pdf_resp.status_code}")
 
         time.sleep(0.3)
 
-    if downloaded:
-        print(f"  📦 {len(downloaded)} Cloudflare-Rechnung(en) heruntergeladen")
-    return downloaded
+    if results:
+        print(f"  ✅ {len(results)} Cloudflare-Rechnung(en) heruntergeladen")
+    return results

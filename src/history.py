@@ -37,6 +37,11 @@ def is_known_file(filepath: Path, history: set) -> bool:
     return file_hash(filepath) in history or _file_hash_md5(filepath) in history
 
 
+def is_known_hash(file_hash_str: str, history: set) -> bool:
+    """Prüft ob ein Hash bereits in der History ist."""
+    return file_hash_str in history
+
+
 def cleanup_old_invoices(keep_days: int):
     """Löscht PDFs aus belege/ die älter als keep_days Tage sind."""
     if not DOWNLOAD_DIR.exists():

@@ -111,11 +111,11 @@ class TestEmailBody:
                 er.status = "unmatched"
 
         body = _build_body(r)
-        assert "DB-RECHNUNGEN" in body
-        assert "BELEGE" in body
+        assert "DB-Rechnungen" in body
+        assert "Belege" in body
         assert "ANTHROPIC" in body
         assert "UNKNOWN" in body
-        assert "KEIN BELEG" in body
+        assert "Kein Beleg" in body
         assert "db.pdf" in body
         assert "anthropic.pdf" in body
 
@@ -145,4 +145,4 @@ class TestEmailBody:
             er.status = "unmatched"
 
         subject = _build_subject(r)
-        assert "⚠️" in subject
+        assert "UNVOLLSTÄNDIG" in subject

@@ -2,6 +2,8 @@
 
 import pytest
 
+from src.figma import _filter_figma_entries
+
 
 class TestFigmaEntryFilter:
     def test_filters_figma_entries(self):
@@ -10,7 +12,7 @@ class TestFigmaEntryFilter:
             {"vendor": "FIGMA, SAN FRANCISCO", "amount": 155.00, "is_credit": False},
             {"vendor": "ANTHROPIC", "amount": 100.0, "is_credit": False},
         ]
-        figma = [e for e in entries if not e.get("is_credit") and "FIGMA" in e.get("vendor", "").upper()]
+        figma = _filter_figma_entries(entries)
         assert len(figma) == 2
 
 

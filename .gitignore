@@ -17,6 +17,7 @@ beispiel-pdfs/
 
 # Logs
 bot.log
+logs/
 
 # Browser data (vendor-specific)
 .browser-data-spiegel/

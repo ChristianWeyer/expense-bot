@@ -13,15 +13,24 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 # ─── 1Password CLI ──────────────────────────────────────────
 
 def _op_read(ref: str) -> str | None:
-    """Liest ein Secret aus 1Password CLI. Gibt None zurück wenn nicht verfügbar."""
+    """Liest ein Secret aus 1Password CLI. Gibt None zurück wenn nicht verfügbar.
+
+    Timeout 30s — op kann bei langsamer Netzwerkverbindung oder wenn die
+    1Password-App noch nicht bereit ist, länger brauchen.
+    """
     if not ref:
         return None
     try:
-        result = _sp.run(["op", "read", ref], capture_output=True, text=True, timeout=10)
+        result = _sp.run(["op", "read", ref], capture_output=True, text=True, timeout=30)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
-    except (FileNotFoundError, _sp.TimeoutExpired):
-        pass
+        if result.stderr and "not signed in" not in result.stderr.lower():
+            # Nur echte Fehler loggen (nicht "not signed in" das spammen würde)
+            import sys as _sys
+            print(f"  ⚠️  op read '{ref}' failed (rc={result.returncode}): {result.stderr.strip()[:100]}", file=_sys.stderr)
+    except (FileNotFoundError, _sp.TimeoutExpired) as e:
+        import sys as _sys
+        print(f"  ⚠️  op read '{ref}' exception: {type(e).__name__}", file=_sys.stderr)
     return None
 
 
@@ -64,9 +73,24 @@ try:
 except ValueError:
     KEEP_DAYS = 30
 
-# Vendor-spezifische Config (ausgelagert statt hardcoded)
+# Vendor-spezifische Config
 FIGMA_TEAM_ID = os.environ.get("FIGMA_TEAM_ID", "").strip() or None
 OWN_EMAIL_DOMAIN = os.environ.get("OWN_EMAIL_DOMAIN", "thinktecture.com").strip()
+
+ADOBE_EMAIL = _get_secret("ADOBE_EMAIL", "op://Shared/Adobe/username")
+ADOBE_PASSWORD = _get_secret("ADOBE_PASSWORD", "op://Shared/Adobe/password")
+
+HEISE_EMAIL = _get_secret("HEISE_EMAIL", "op://Shared/heise.de/username")
+HEISE_PASSWORD = _get_secret("HEISE_PASSWORD", "op://Shared/heise.de/password")
+
+GOOGLE_EMAIL = _get_secret("GOOGLE_EMAIL", "op://Private/Google - Christian/username")
+GOOGLE_PASSWORD = _get_secret("GOOGLE_PASSWORD", "op://Private/Google - Christian/password")
+
+FIGMA_EMAIL = _get_secret("FIGMA_EMAIL", "op://Private/Figma/username")
+FIGMA_PASSWORD = _get_secret("FIGMA_PASSWORD", "op://Private/Figma/password")
+
+OPENAI_EMAIL = _get_secret("OPENAI_EMAIL", "op://Private/Open AI.com/username")
+OPENAI_PASSWORD = _get_secret("OPENAI_PASSWORD", "op://Private/Open AI.com/password")
 
 # ─── Pfade ──────────────────────────────────────────────────
 
@@ -88,3 +112,8 @@ DOWNLOAD_BTN_SELECTOR = (
     'a:has-text("Rechnung als PDF herunterladen"):visible, '
     'button:has-text("Rechnung als PDF herunterladen"):visible'
 )
+
+# ─── Timeouts (ms) ──────────────────────────────────────────
+PAGE_TIMEOUT = 30000       # Seitennavigation
+DOWNLOAD_TIMEOUT = 15000   # PDF-Download
+LOGIN_TIMEOUT = 120000     # Login inkl. 2FA

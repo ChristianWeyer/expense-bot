@@ -1,146 +1,177 @@
 # Expense Bot
 
-Automatisiert die Beleg-Sammlung aus Mastercard/BusinessCard-Abrechnungen:
-- **DB-Rechnungen** von bahn.de per Playwright
-- **Belege aus Outlook** (Ordner "Belege" + "Archiv") per Graph API
-- **Amazon-Rechnungen** von amazon.de per Playwright
-- **MC-PDF Parsing** via GPT Vision (digital + gescannt)
-- **Email-Versand** aller gesammelten Belege per Graph API (OAuth)
+Automatisiert die Beleg-Sammlung aus Mastercard/BusinessCard-Abrechnungen (Sparkasse/qards Format). Parst das MC-PDF per GPT Vision, sucht Belege in Outlook-Emails und diversen Vendor-Portalen, und versendet alles per Email.
 
-## Setup (einmalig)
+## Unterstützte Quellen
+
+| Quelle | Methode | Auth |
+|--------|---------|------|
+| **Deutsche Bahn** | bahn.de Playwright (CDP) | 1Password + 2FA |
+| **Amazon** | amazon.de Playwright (CDP) | 1Password |
+| **Outlook Emails** | Microsoft Graph API | OAuth (Device Code) |
+| **OpenAI API** | platform.openai.com Stripe | 1Password |
+| **ChatGPT** | chatgpt.com Stripe | 1Password |
+| **Adobe** | account.adobe.com Billing | 1Password |
+| **Figma** | figma.com API | 1Password |
+| **Google/YouTube** | pay.google.com Transaktionsdetails | CDP Session |
+| **Heise** | Plenigo Billing Portal | 1Password |
+| **Spiegel** | gruppenkonto.spiegel.de | 1Password (eigener Browser) |
+| **Audible** | audible.de Monatsbeitraege | Amazon Session |
+| **Cloudflare** | Billing API | API Token |
+| **Hetzner, GitHub, Anthropic, ...** | Outlook Email-Belege (Stripe PDFs) | Graph API |
+
+## Setup
 
 ### 1. Skript-Setup
 
 ```bash
-cd expense-bot
-./setup.sh
-```
-
-Erstellt ein Python-venv und installiert alle Abhängigkeiten (playwright, msal, requests, pdfplumber).
-
-### 2. Azure App Registration
-
-Damit der Bot Emails über dein Microsoft-365-Konto senden kann, brauchst du eine App Registration:
-
-1. Gehe zu [Azure Portal → App Registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
-2. Klicke "New registration"
-3. Name: z.B. `expense-bot`
-4. Supported account types: "Accounts in this organizational directory only" (Single Tenant) oder "Accounts in any organizational directory" (Multi-Tenant)
-5. Redirect URI: leer lassen (nicht nötig für Device Code Flow)
-6. Nach der Erstellung: kopiere die **Application (client) ID** und **Directory (tenant) ID**
-7. Unter "Authentication":
-   - Aktiviere "Allow public client flows" → **Yes**
-8. Unter "API Permissions":
-   - "Add a permission" → Microsoft Graph → Delegated → **Mail.Send** und **Mail.Read**
-   - Falls nötig: Admin Consent erteilen lassen
-
-### 3. .env ausfüllen
-
-```bash
-# Falls noch nicht geschehen:
+git clone <repo>
+cd bahn-rechnung-bot
+./setup.sh          # Erstellt venv, installiert Dependencies
 cp env.template .env
 ```
 
-Trage ein:
-- **BAHN_EMAIL / BAHN_PASSWORD**: Deine bahn.de Zugangsdaten
-- **RECIPIENT_EMAIL**: Email-Adresse der Empfängerin
-- **AZURE_CLIENT_ID**: Die Application (client) ID aus Schritt 2
-- **AZURE_TENANT_ID**: Die Directory (tenant) ID (oder `common`)
+### 2. .env konfigurieren
+
+Mindestens erforderlich:
+- `RECIPIENT_EMAIL` — Ziel-Adresse fuer den Beleg-Report
+- `AZURE_CLIENT_ID` + `AZURE_TENANT_ID` — fuer Graph API (Email)
+- `OPENAI_API_KEY` — fuer MC-PDF Parsing (GPT Vision)
+
+Alle Vendor-Credentials werden automatisch aus **1Password CLI** geladen (`op read`). Die `OP_*` Variablen in `.env` definieren die 1Password-Referenzen. Alternativ koennen Credentials direkt in `.env` gesetzt werden.
+
+Siehe `env.template` fuer alle Optionen.
+
+### 3. Azure App Registration
+
+Fuer Email-Versand und Outlook-Belegsuche:
+
+1. [Azure Portal -> App Registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
+2. "New registration" -> Name: `expense-bot`
+3. "Authentication" -> "Allow public client flows" -> **Yes**
+4. "API Permissions" -> Microsoft Graph -> Delegated -> **Mail.Send** + **Mail.Read**
+5. Client ID und Tenant ID in `.env` eintragen
+
+### 4. Chrome Canary (empfohlen)
+
+Fuer Portale mit Browser-Login (Bahn, Amazon, Google, Adobe, etc.):
+
+```bash
+# Chrome Canary installieren: https://www.google.com/chrome/canary/
+# Einmalig: in Canary bei allen Portalen einloggen
+# Der Bot nutzt die bestehende Session via CDP
+```
 
 ## Nutzung
 
 ```bash
-# Aus Mastercard-PDF – extrahiert DB-Buchungsnummern und lädt gezielt Rechnungen
+# Standard: MC-PDF angeben, Chrome Canary wird automatisch gestartet
 ./run.sh --mc-pdf /pfad/zur/abrechnung.pdf
 
-# Erst mal nur testen (lädt runter, sendet aber nicht)
+# Nur gelb markierte Eintraege (fuer selektive Abrechnung)
+./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --marked-entries-only
+
+# Dry-Run (laedt alles, sendet aber keine Email)
 ./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --dry-run
 
-# Browser sichtbar starten (zum Debuggen)
-./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --headed --dry-run
+# Browser sichtbar (Debugging)
+./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --headed
 
-# DB-Rechnungen + alle Belege aus Outlook "Belege"-Ordner
-./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --fetch-receipts
+# Einzelnen Scraper testen (parst PDF, fuehrt nur diesen Scraper aus, kein Email-Versand)
+./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --only google
+./run.sh --mc-pdf /pfad/zur/abrechnung.pdf --only amazon
+# Verfuegbar: outlook, bahn, amazon, google, spiegel, audible, heise, adobe, figma, cloudflare, portal
 
-# Eigenen Chrome nutzen (Session bleibt erhalten, kein Login nötig!)
-./run.sh --cdp --mc-pdf /pfad/zur/abrechnung.pdf
-
-# Letzte Reise – Rechnung laden und versenden
-./run.sh
-
-# Alle neuen Rechnungen auf einmal
-./run.sh --all
-```
-
-### Chrome Canary nutzen (empfohlen)
-
-Damit du nicht jedes Mal neu einloggen musst, kann der Bot Chrome Canary als dedizierten Bot-Browser nutzen – parallel zu deinem normalen Chrome:
-
-```bash
-# 1. Chrome Canary mit Debugging-Port starten (einmalig):
-/Applications/Google\ Chrome\ Canary.app/Contents/MacOS/Google\ Chrome\ Canary --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-canary-bahn-bot"
-
-# 2. In Canary bei bahn.de einloggen (normal, mit "Angemeldet bleiben")
-
-# 3. Bot mit --cdp starten:
-./run.sh --cdp --mc-pdf /pfad/zur/abrechnung.pdf --dry-run
-```
-
-Vorteil: Dein normaler Chrome bleibt unangetastet, und die bahn.de-Session in Canary bleibt erhalten – kein erneutes Login/2FA nötig!
-
-Falls Chrome Canary noch nicht installiert ist: https://www.google.com/chrome/canary/
-
-### Nur den Mastercard-Parser testen (ohne bahn.de Login)
-
-```bash
+# Ohne run.sh (manuell):
 source .venv/bin/activate
-python parse_mastercard.py /pfad/zur/abrechnung.pdf
+python expense_bot.py --mc-pdf abrechnung.pdf --cdp http://localhost:9222
 ```
 
-### Erster Email-Versand (OAuth Login)
+### Was passiert bei einem Run?
 
-Beim ersten Mal, wenn eine Email gesendet wird, erscheint im Terminal:
+1. **MC-PDF parsen** — GPT Vision extrahiert alle Buchungseintraege (~2 Min)
+2. **Outlook-Emails durchsuchen** — Graph API sucht passende Belege (~2 Min)
+3. **DB-Rechnungen** — bahn.de per Playwright/CDP (~2 Min)
+4. **Amazon-Rechnungen** — amazon.de per Playwright/CDP (~2 Min)
+5. **Portal-Scraper** — ChatGPT, OpenAI, Heise, Adobe, Figma, Google, Audible, Cloudflare (~3 Min)
+6. **Spiegel** — eigener Browser-Kontext (~15 Sek)
+7. **Email versenden** — alle PDFs als Anhaenge (~3 Sek)
 
-```
-🔐 Microsoft-Anmeldung erforderlich (einmalig)
-  → Öffne: https://microsoft.com/devicelogin
-  → Code:  ABC123DEF
-```
+Gesamtdauer: ~12 Minuten. Ergebnis: ~80/84 Belege (>93% Match-Rate).
 
-Öffne den Link, gib den Code ein und melde dich an. Das Token wird danach lokal gecacht (`.token_cache.json`) und automatisch erneuert.
+### Erster Run des Monats
 
-## Dateien
+1. **OAuth Token**: Beim ersten Email-Versand erscheint ein Device Code im Terminal. Link oeffnen, Code eingeben, anmelden. Token wird gecacht.
+2. **Chrome Canary Sessions**: Falls Sessions abgelaufen sind, loggt der Bot automatisch per 1Password ein (inkl. 2FA-Wartezeit).
+3. **1Password CLI**: Muss einmalig mit `op signin` authentifiziert sein.
 
-```
-expense-bot/
-├── expense_bot.py          # Orchestrator (CLI, Ablaufsteuerung)
-├── src/
-│   ├── config.py           # Konfiguration, 1Password CLI
-│   ├── timer.py            # Timer-Utility
-│   ├── history.py          # Download-Historie, Deduplizierung
-│   ├── auth.py             # Microsoft Graph OAuth (MSAL)
-│   ├── bahn.py             # bahn.de Login + Rechnungs-Download
-│   ├── mastercard.py       # Mastercard-PDF Parser (GPT Vision)
-│   ├── outlook.py          # Outlook Belegsuche per Graph API
-│   ├── amazon.py           # Amazon.de Rechnungs-Download
-│   └── mail.py             # Email-Versand via Graph API
-├── tests/                  # pytest Test-Suite
-├── setup.sh                # Einmaliges Setup (venv + Dependencies)
-├── run.sh                  # Start-Skript (aktiviert venv automatisch)
-├── requirements.txt        # Python-Abhängigkeiten
-├── env.template            # Vorlage für Konfiguration
-├── .env                    # Deine Konfiguration (nicht committen!)
-├── .token_cache.json       # OAuth Token-Cache (nicht committen!)
-├── rechnungen/             # Heruntergeladene DB-Rechnungen
-└── belege/                 # Heruntergeladene Belege aus Outlook
+### Token-Cache zuruecksetzen
+
+Falls OAuth-Probleme auftreten:
+```bash
+rm .token_cache.json
+# Naechster Run fordert erneut Device Code Login an
 ```
 
-## Hinweise
+## Architektur
 
-- Rechnungen werden in `./rechnungen/` gespeichert
-- Bereits verarbeitete Rechnungen werden nicht erneut gesendet (Duplikat-Erkennung per SHA256-Hash)
-- Alte PDFs in `rechnungen/` werden automatisch nach 30 Tagen gelöscht (konfigurierbar via `KEEP_DAYS` in `.env`)
-- Storno-Paare im Mastercard-PDF (gleiche Auftragsnr. mit + und -) werden erkannt
-- `.env` und `.token_cache.json` enthalten sensible Daten – niemals committen!
-- Falls bahn.de das Layout ändert, müssen ggf. die CSS-Selektoren in `bahn_invoice_bot.py` angepasst werden
-- Empfohlen: beim ersten Mal mit `--headed --dry-run` testen
+```
+expense_bot.py              # Orchestrator (CLI, Ablaufsteuerung)
+run.sh                      # Start-Skript (CDP-Check, Logging)
+src/
+  config.py                 # Konfiguration, 1Password CLI, Timeouts
+  auth.py                   # Microsoft Graph OAuth (MSAL, Device Code)
+  mastercard.py             # MC-PDF Parser (GPT Vision, seitenweise)
+  outlook.py                # Outlook Belegsuche + Scoring (Graph API)
+  bahn.py                   # bahn.de Login + Rechnungs-Download
+  amazon.py                 # Amazon.de Rechnungs-Download
+  google.py                 # Google Payments (YouTube, Google One)
+  portal.py                 # Generischer Portal-Scraper (JSON-Config)
+  figma.py                  # Figma Invoice API
+  heise.py                  # Heise/Plenigo Billing
+  adobe.py                  # Adobe Billing (React Spectrum)
+  spiegel.py                # Spiegel Abo-Rechnungen
+  audible.py                # Audible.de Monatsbeitraege
+  cloudflare.py             # Cloudflare Billing API
+  mail.py                   # Email-Versand (Graph API)
+  result.py                 # RunResult Datenstruktur
+  timer.py                  # Timer-Utility
+  history.py                # Download-Historie, Cleanup
+portals/
+  chatgpt.json              # ChatGPT Subscription (Stripe)
+  openai-api.json           # OpenAI API Billing (Stripe)
+  cloudflare.json           # Cloudflare Dashboard
+tests/
+  test_outlook_scoring.py   # Outlook Email-Scoring (32 Tests)
+  test_mastercard_marked.py # MC-PDF Marked-Entry Filterung (9 Tests)
+  test_mastercard_llm.py    # LLM Integration Tests (15 Tests, $0.50)
+  test_*.py                 # Weitere Unit-Tests (~170)
+logs/                       # Run-Logs (via run.sh)
+belege/                     # Heruntergeladene Belege (pro Run)
+```
+
+## Tests
+
+```bash
+# Alle Unit-Tests (~215)
+pytest tests/ -x -q
+
+# Inklusive LLM-Integration (kostet ~$0.50, braucht OPENAI_API_KEY)
+RUN_LLM_TESTS=1 pytest tests/test_mastercard_llm.py -v
+```
+
+## Konfiguration
+
+Alle Einstellungen in `.env` (siehe `env.template`):
+
+| Variable | Pflicht | Beschreibung |
+|----------|---------|--------------|
+| `RECIPIENT_EMAIL` | ja | Ziel-Email fuer Beleg-Report |
+| `AZURE_CLIENT_ID` | ja | Microsoft Graph OAuth Client ID |
+| `OPENAI_API_KEY` | ja* | GPT Vision API Key (*wenn MC-PDF) |
+| `CDP_URL` | nein | Chrome CDP URL (default: localhost:9222) |
+| `MC_PDF` | nein | Pfad zum MC-PDF (oder via CLI) |
+| `KEEP_DAYS` | nein | Belege-Aufbewahrung in Tagen (default: 30) |
+| `OWN_EMAIL_DOMAIN` | nein | Eigene Domain (filtert ausgehende Emails) |
+
+Vendor-Credentials: entweder direkt (`GOOGLE_EMAIL=...`) oder per 1Password (`OP_GOOGLE_EMAIL=op://...`).
